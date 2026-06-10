@@ -231,12 +231,37 @@ struct InboxController: RouteCollection {
         if innerType == "Follow" {
             let actorDomain = extractDomain(from: activity.actor) ?? activity.actor
 
-            if let subscriber = try await req.repository.getSubscriber(domain: actorDomain) {
-                // LitePub: if we had an outbound Follow, send Undo Follow back.
-                try await subscriber.dispatchUndoFollowIfNeeded(on: req.queue)
-                try await req.repository.deleteSubscriber(domain: actorDomain)
-                req.logger.notice("Removed subscriber: \(actorDomain)")
+            guard let subscriber = try await req.repository.getSubscriber(domain: actorDomain)
+            else { return }
+
+            // Only honor an Undo that references the currently stored Follow;
+            // a stale Undo for a superseded Follow must not remove the
+            // subscriber that re-followed since.
+            let matchesCurrentFollow: Bool
+            switch object {
+            case .activity(let inner):
+                matchesCurrentFollow =
+                    inner.id == subscriber.followActivityID
+                    && inner.actor == subscriber.actorID
+            case .object(let inner):
+                matchesCurrentFollow =
+                    inner.id == subscriber.followActivityID
+                    && (inner.actor == nil || inner.actor == subscriber.actorID)
+            case .uri(let uri):
+                matchesCurrentFollow = uri == subscriber.followActivityID
             }
+
+            guard matchesCurrentFollow else {
+                req.logger.notice(
+                    "Undo object from \(actorDomain) does not reference current Follow, ignoring"
+                )
+                return
+            }
+
+            // LitePub: if we had an outbound Follow, send Undo Follow back.
+            try await subscriber.dispatchUndoFollowIfNeeded(on: req.queue)
+            try await req.repository.deleteSubscriber(domain: actorDomain)
+            req.logger.notice("Removed subscriber: \(actorDomain)")
         } else {
             try await handleActivity(activity: activity, body: body, req: req)
         }

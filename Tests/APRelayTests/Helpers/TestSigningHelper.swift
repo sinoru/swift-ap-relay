@@ -55,6 +55,7 @@ enum TestSigning {
         id: String = "https://remote.example/activities/\(UUID().uuidString)",
         actor: String = testActorID,
         followID: String = "https://remote.example/activities/follow-1",
+        innerActor: String? = nil,
         objectAsURI: Bool = false
     ) -> APActivity {
         let object: APObject
@@ -65,7 +66,7 @@ enum TestSigning {
                 context: nil,
                 id: followID,
                 type: "Follow",
-                actor: actor,
+                actor: innerActor ?? actor,
                 object: .uri("https://www.w3.org/ns/activitystreams#Public"),
                 to: nil,
                 cc: nil,
@@ -82,6 +83,26 @@ enum TestSigning {
             cc: nil,
             published: nil
         )
+    }
+
+    /// Creates raw Undo JSON whose nested Follow lacks an actor, so it
+    /// decodes as a generic object rather than a full activity.
+    static func makeUndoJSONWithBareFollowObject(
+        actor: String = testActorID,
+        followID: String = "https://remote.example/activities/follow-1"
+    ) -> Data {
+        Data("""
+            {
+                "@context": "https://www.w3.org/ns/activitystreams",
+                "id": "https://remote.example/activities/\(UUID().uuidString)",
+                "type": "Undo",
+                "actor": "\(actor)",
+                "object": {
+                    "id": "\(followID)",
+                    "type": "Follow"
+                }
+            }
+            """.utf8)
     }
 
     /// Creates a Create activity.
@@ -258,12 +279,23 @@ enum TestSigning {
         path: String = "/inbox",
         host: String = "localhost"
     ) throws -> (headers: HTTPHeaders, body: ByteBuffer) {
-        let data = try JSONEncoder().encode(activity)
-        let sigHeaders = try signedHeaders(path: path, host: host, body: data)
+        try signedRequest(
+            json: JSONEncoder().encode(activity),
+            path: path,
+            host: host
+        )
+    }
+
+    static func signedRequest(
+        json: Data,
+        path: String = "/inbox",
+        host: String = "localhost"
+    ) throws -> (headers: HTTPHeaders, body: ByteBuffer) {
+        let sigHeaders = try signedHeaders(path: path, host: host, body: json)
         var headers = HTTPHeaders()
         for (name, value) in sigHeaders {
             headers.add(name: name, value: value)
         }
-        return (headers, ByteBuffer(data: data))
+        return (headers, ByteBuffer(data: json))
     }
 }
