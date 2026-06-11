@@ -110,6 +110,17 @@ struct InboxController: RouteCollection {
         let config = req.relayConfig
         let repository = req.repository
 
+        // The stored actorID is what handleUndo and
+        // validateOutboundFollowResponse later compare the verified signer
+        // against, so bind it to the signature here rather than trusting
+        // the unauthenticated body field.
+        guard activity.actor == verifiedActor.id else {
+            req.logger.notice(
+                "Follow actor \(activity.actor) does not match signer \(verifiedActor.id), ignoring"
+            )
+            return
+        }
+
         guard let object = activity.object,
             case .uri(let objectURI) = object,
             isPublicURI(objectURI) || objectURI == config.actorURL
@@ -434,7 +445,7 @@ struct InboxController: RouteCollection {
         guard subscriber.actorID == activity.actor,
             subscriber.actorID == verifiedActor.id
         else {
-            req.logger.info(
+            req.logger.notice(
                 "\(activity.type) actor \(activity.actor) signed by \(verifiedActor.id) does not match subscriber actor \(subscriber.actorID), ignoring"
             )
             return nil

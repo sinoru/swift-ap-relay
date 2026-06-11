@@ -36,11 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Large ActivityPub payloads (e.g. long posts, many mentions) now accepted instead of returning 413 Payload Too Large
 - Stale Undo Follow referencing a superseded Follow no longer removes a re-subscribed instance; Undo must come from and be signed by the stored subscriber actor and reference the currently stored Follow (matching id, and actor when present)
 - Accept/Reject responses to the relay's outbound Follow are now honored only when signed by the stored subscriber actor
+- Follow activities whose actor does not match the verified HTTP signature signer are now ignored, so the stored subscriber identity is always signature-bound
 
 ### Security
 
 - Unified HTTP signature verification error responses on `/inbox` to prevent oracle/fingerprinting attacks; all failure modes (missing/malformed Signature, stale Date, Digest mismatch, actor fetch error, invalid signature) now return identical `401 Unauthorized "Signature verification failed"` with server-side warning logs for operator debugging
-- Rejected subscriber state is now sticky: a repeat Follow from a rejected domain no longer silently reinstates the subscriber (previously auto-accept mode reset `.rejected` → `.accepted`, making admin rejections effectively one-time deletes)
+- Rejected subscriber state is now sticky: a repeat Follow from a rejected domain no longer silently reinstates the subscriber (previously auto-accept mode reset `.rejected` → `.accepted`, making admin rejections effectively one-time deletes). A matching Undo still removes the record (the remote's withdrawal is honored), so a domain can shed the rejected state by unsubscribing and re-following — use the block list for persistent abusers
 - HTTP signatures on `/inbox` now require `date` in the signed headers list, and additionally `digest` on POST, following Mastodon's enforcement. Without these, Date freshness and body integrity checks are not cryptographically bound to the signature; Misskey, Pleroma, and Akkoma senders already include both in practice
 
 ## [0.0.1] - 2026-04-12

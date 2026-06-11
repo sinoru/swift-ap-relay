@@ -144,6 +144,27 @@ struct InboxTests {
         }
     }
 
+    @Test("Follow whose actor does not match the signer is ignored")
+    func followMismatchedSignerIgnored() async throws {
+        try await withApp(configure: { app in
+            try await testConfigure(app)
+            // The signature verifies, but it resolves to a different actor
+            // on the same domain than the claimed Follow actor.
+            app.actorFetcher = MockActorFetcher(id: "https://remote.example/other-actor")
+        }) { app in
+            let activity = TestSigning.makeFollowActivity()
+            let (headers, body) = try TestSigning.signedRequest(activity: activity)
+
+            try await app.testing().test(.POST, "inbox", headers: headers, body: body) {
+                res async in
+                #expect(res.status == .accepted)
+            }
+
+            let subscribers = try await app.repository.getAllSubscribers(state: nil)
+            #expect(subscribers.count == 0)
+        }
+    }
+
     // MARK: - Undo
 
     @Test("Undo with nested Follow deletes subscriber")
