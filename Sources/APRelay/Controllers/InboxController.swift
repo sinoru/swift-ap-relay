@@ -265,6 +265,12 @@ struct InboxController: RouteCollection {
                 return
             }
 
+            // A matching Undo removes the record even for a rejected
+            // subscriber: the remote's withdrawal is honored, and a domain
+            // shedding the sticky rejected state (see handleFollow) via
+            // Undo + re-Follow is an accepted trade-off — persistent
+            // abusers belong on the block list.
+            //
             // LitePub: if we had an outbound Follow, send Undo Follow back.
             try await subscriber.dispatchUndoFollowIfNeeded(on: req.queue)
             try await req.repository.deleteSubscriber(domain: actorDomain)
