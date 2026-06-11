@@ -80,11 +80,16 @@ struct InboxController: RouteCollection {
                     req: req
                 )
             case "Undo":
-                try await handleUndo(activity: activity, body: Data(buffer: body), req: req)
+                try await handleUndo(
+                    activity: activity,
+                    verifiedActor: verifiedActor,
+                    body: Data(buffer: body),
+                    req: req
+                )
             case "Accept":
-                try await handleAccept(activity: activity, req: req)
+                try await handleAccept(activity: activity, verifiedActor: verifiedActor, req: req)
             case "Reject":
-                try await handleReject(activity: activity, req: req)
+                try await handleReject(activity: activity, verifiedActor: verifiedActor, req: req)
             case "Create", "Announce", "Delete", "Update", "Move", "Add", "Remove", "Like", "EmojiReact":
                 try await handleActivity(activity: activity, body: Data(buffer: body), req: req)
             default:
@@ -213,6 +218,7 @@ struct InboxController: RouteCollection {
 
     private func handleUndo(
         activity: APActivity,
+        verifiedActor: VerifiedActor,
         body: Data,
         req: Request
     ) async throws {
@@ -234,9 +240,16 @@ struct InboxController: RouteCollection {
             guard let subscriber = try await req.repository.getSubscriber(domain: actorDomain)
             else { return }
 
-            guard subscriber.actorID == activity.actor else {
+            // Compare both the claimed actor and the actor that actually
+            // signed the request: the signature middleware only binds the
+            // signer to the activity actor's domain, so the body field
+            // alone could be set to the stored actor by any same-domain
+            // signer.
+            guard subscriber.actorID == activity.actor,
+                subscriber.actorID == verifiedActor.id
+            else {
                 req.logger.notice(
-                    "Undo actor \(activity.actor) does not match subscriber actor \(subscriber.actorID), ignoring"
+                    "Undo actor \(activity.actor) signed by \(verifiedActor.id) does not match subscriber actor \(subscriber.actorID), ignoring"
                 )
                 return
             }
@@ -357,8 +370,17 @@ struct InboxController: RouteCollection {
 
     // MARK: - Accept (LitePub mutual follow)
 
-    private func handleAccept(activity: APActivity, req: Request) async throws {
-        guard let subscriber = try await validateOutboundFollowResponse(activity: activity, req: req)
+    private func handleAccept(
+        activity: APActivity,
+        verifiedActor: VerifiedActor,
+        req: Request
+    ) async throws {
+        guard
+            let subscriber = try await validateOutboundFollowResponse(
+                activity: activity,
+                verifiedActor: verifiedActor,
+                req: req
+            )
         else { return }
 
         let actorDomain = subscriber.domain
@@ -367,8 +389,17 @@ struct InboxController: RouteCollection {
 
     // MARK: - Reject (LitePub mutual follow)
 
-    private func handleReject(activity: APActivity, req: Request) async throws {
-        guard let subscriber = try await validateOutboundFollowResponse(activity: activity, req: req)
+    private func handleReject(
+        activity: APActivity,
+        verifiedActor: VerifiedActor,
+        req: Request
+    ) async throws {
+        guard
+            let subscriber = try await validateOutboundFollowResponse(
+                activity: activity,
+                verifiedActor: verifiedActor,
+                req: req
+            )
         else { return }
 
         let actorDomain = subscriber.domain
@@ -380,10 +411,12 @@ struct InboxController: RouteCollection {
         )
     }
 
-    /// Validates that an incoming Accept/Reject references our outbound Follow.
+    /// Validates that an incoming Accept/Reject was signed by the stored
+    /// subscriber actor and references our outbound Follow.
     /// Returns the matched subscriber, or nil if validation fails.
     private func validateOutboundFollowResponse(
         activity: APActivity,
+        verifiedActor: VerifiedActor,
         req: Request
     ) async throws -> Subscriber? {
         let actorDomain = extractDomain(from: activity.actor) ?? activity.actor
@@ -398,9 +431,11 @@ struct InboxController: RouteCollection {
             return nil
         }
 
-        guard subscriber.actorID == activity.actor else {
+        guard subscriber.actorID == activity.actor,
+            subscriber.actorID == verifiedActor.id
+        else {
             req.logger.info(
-                "\(activity.type) actor \(activity.actor) does not match subscriber actor \(subscriber.actorID), ignoring"
+                "\(activity.type) actor \(activity.actor) signed by \(verifiedActor.id) does not match subscriber actor \(subscriber.actorID), ignoring"
             )
             return nil
         }

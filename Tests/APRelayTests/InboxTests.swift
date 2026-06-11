@@ -200,6 +200,69 @@ struct InboxTests {
         }
     }
 
+    @Test("Undo matching current Follow deletes rejected subscriber")
+    func undoMatchingFollowDeletesRejectedSubscriber() async throws {
+        try await withApp(configure: testConfigure) { app in
+            let sub = Subscriber(
+                domain: TestSigning.testActorDomain,
+                inboxURL: TestSigning.testInboxURL,
+                actorID: TestSigning.testActorID,
+                state: .rejected,
+                followActivityID: "https://remote.example/activities/follow-1",
+                createdAt: Date(),
+                updatedAt: Date()
+            )
+            try await app.repository.saveSubscriber(sub)
+
+            let activity = TestSigning.makeUndoActivity()
+            let (headers, body) = try TestSigning.signedRequest(activity: activity)
+
+            try await app.testing().test(.POST, "inbox", headers: headers, body: body) {
+                res async in
+                #expect(res.status == .accepted)
+            }
+
+            // The rejected state is not preserved across a matching Undo;
+            // the remote's withdrawal removes the record (see handleUndo).
+            let subscribers = try await app.repository.getAllSubscribers(state: nil)
+            #expect(subscribers.count == 0)
+        }
+    }
+
+    @Test("Undo signed by a different actor keeps subscriber")
+    func undoSignedByDifferentActorKeepsSubscriber() async throws {
+        try await withApp(configure: { app in
+            try await testConfigure(app)
+            // The signature verifies, but it resolves to a different actor
+            // on the subscriber's domain.
+            app.actorFetcher = MockActorFetcher(id: "https://remote.example/other-actor")
+        }) { app in
+            let sub = Subscriber(
+                domain: TestSigning.testActorDomain,
+                inboxURL: TestSigning.testInboxURL,
+                actorID: TestSigning.testActorID,
+                state: .accepted,
+                followActivityID: "https://remote.example/activities/follow-1",
+                createdAt: Date(),
+                updatedAt: Date()
+            )
+            try await app.repository.saveSubscriber(sub)
+
+            // The body claims the stored subscriber actor and references
+            // the current Follow, but the request is signed by other-actor.
+            let activity = TestSigning.makeUndoActivity()
+            let (headers, body) = try TestSigning.signedRequest(activity: activity)
+
+            try await app.testing().test(.POST, "inbox", headers: headers, body: body) {
+                res async in
+                #expect(res.status == .accepted)
+            }
+
+            let subscribers = try await app.repository.getAllSubscribers(state: nil)
+            #expect(subscribers.count == 1)
+        }
+    }
+
     @Test("Undo with stale nested Follow keeps subscriber")
     func undoStaleNestedFollowKeepsSubscriber() async throws {
         try await withApp(configure: testConfigure) { app in
@@ -740,6 +803,49 @@ struct InboxTests {
 
             let activity = TestSigning.makeRejectActivity(
                 followActivityID: "http://localhost/activities/unknown",
+                relayActorURL: config.actorURL
+            )
+            let (headers, body) = try TestSigning.signedRequest(activity: activity)
+
+            try await app.testing().test(.POST, "inbox", headers: headers, body: body) {
+                res async in
+                #expect(res.status == .accepted)
+            }
+
+            // Subscriber should still exist.
+            let subscriber = try await app.repository.getSubscriber(
+                domain: TestSigning.testActorDomain
+            )
+            #expect(subscriber != nil)
+        }
+    }
+
+    @Test("Reject signed by a different actor keeps subscriber")
+    func rejectSignedByDifferentActorKeepsSubscriber() async throws {
+        try await withApp(configure: { app in
+            try await testConfigure(app)
+            // The signature verifies, but it resolves to a different actor
+            // on the subscriber's domain.
+            app.actorFetcher = MockActorFetcher(id: "https://remote.example/other-actor")
+        }) { app in
+            let config = app.relayConfig
+            let outboundFollowID = "http://localhost/activities/outbound-follow-1"
+
+            let sub = Subscriber(
+                domain: TestSigning.testActorDomain,
+                inboxURL: TestSigning.testInboxURL,
+                actorID: TestSigning.testActorID,
+                state: .accepted,
+                followActivityID: "https://remote.example/activities/follow-1",
+                followObjectURI: config.actorURL,
+                outboundFollowActivityID: outboundFollowID,
+                createdAt: Date(),
+                updatedAt: Date()
+            )
+            try await app.repository.saveSubscriber(sub)
+
+            let activity = TestSigning.makeRejectActivity(
+                followActivityID: outboundFollowID,
                 relayActorURL: config.actorURL
             )
             let (headers, body) = try TestSigning.signedRequest(activity: activity)
