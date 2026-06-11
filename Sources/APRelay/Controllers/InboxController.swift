@@ -234,6 +234,13 @@ struct InboxController: RouteCollection {
             guard let subscriber = try await req.repository.getSubscriber(domain: actorDomain)
             else { return }
 
+            guard subscriber.actorID == activity.actor else {
+                req.logger.notice(
+                    "Undo actor \(activity.actor) does not match subscriber actor \(subscriber.actorID), ignoring"
+                )
+                return
+            }
+
             // Only honor an Undo that references the currently stored Follow;
             // a stale Undo for a superseded Follow must not remove the
             // subscriber that re-followed since.
