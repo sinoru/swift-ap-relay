@@ -236,15 +236,16 @@ struct InboxController: RouteCollection {
         guard let object = activity.object else { return }
 
         let actorDomain = extractDomain(from: activity.actor) ?? activity.actor
-        let subscriber = try await req.repository.getSubscriber(domain: actorDomain)
 
-        // Classify the Undo. An embedded object carries its own type; a
-        // URI-only object is opaque, so it is treated as an Undo Follow only
-        // when it references the subscriber's currently stored Follow. Any
-        // other Undo — an Undo of a non-Follow activity sent as a bare URI
-        // (e.g. an un-boost), or a stale Undo Follow URI for a superseded
-        // Follow — falls through to the broadcast path instead of being
-        // silently dropped.
+        // Classify the Undo. An embedded object carries its own type, so a
+        // non-Follow Undo (e.g. an un-boost) is recognized without a
+        // repository read here. A URI-only object is opaque, so it is
+        // treated as an Undo Follow only when it references the subscriber's
+        // currently stored Follow — that case needs the lookup to classify.
+        // Any other Undo — a non-Follow activity sent as a bare URI, or a
+        // stale Undo Follow URI for a superseded Follow — falls through to
+        // the broadcast path instead of being silently dropped.
+        var subscriber: Subscriber?
         let isUndoFollow: Bool
         switch object {
         case .activity(let inner):
@@ -252,6 +253,7 @@ struct InboxController: RouteCollection {
         case .object(let inner):
             isUndoFollow = inner.type == "Follow"
         case .uri(let uri):
+            subscriber = try await req.repository.getSubscriber(domain: actorDomain)
             isUndoFollow = uri == subscriber?.followActivityID
         }
 
@@ -260,6 +262,11 @@ struct InboxController: RouteCollection {
             return
         }
 
+        // An embedded Undo Follow deferred its lookup to here so non-Follow
+        // undos never pay for it; the URI case already fetched above.
+        if subscriber == nil {
+            subscriber = try await req.repository.getSubscriber(domain: actorDomain)
+        }
         guard let subscriber else { return }
 
         // Compare both the claimed actor and the actor that actually
