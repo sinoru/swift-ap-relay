@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stale Undo Follow referencing a superseded Follow no longer removes a re-subscribed instance; Undo must come from and be signed by the stored subscriber actor and reference the currently stored Follow (matching id, and actor when present)
 - Accept/Reject responses to the relay's outbound Follow are now honored only when signed by the stored subscriber actor
 - Follow activities whose actor does not match the verified HTTP signature signer are now ignored, so the stored subscriber identity is always signature-bound
+- Undo with a bare-URI object that does not reference the stored Follow is now relayed through the normal broadcast path instead of being silently dropped, so URI-encoded Undo of non-Follow activities (e.g. an un-boost) is no longer lost
 
 ### Security
 

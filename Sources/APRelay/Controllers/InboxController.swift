@@ -235,73 +235,83 @@ struct InboxController: RouteCollection {
     ) async throws {
         guard let object = activity.object else { return }
 
-        let innerType: String?
+        let actorDomain = extractDomain(from: activity.actor) ?? activity.actor
+        let subscriber = try await req.repository.getSubscriber(domain: actorDomain)
+
+        // Classify the Undo. An embedded object carries its own type; a
+        // URI-only object is opaque, so it is treated as an Undo Follow only
+        // when it references the subscriber's currently stored Follow. Any
+        // other Undo — an Undo of a non-Follow activity sent as a bare URI
+        // (e.g. an un-boost), or a stale Undo Follow URI for a superseded
+        // Follow — falls through to the broadcast path instead of being
+        // silently dropped.
+        let isUndoFollow: Bool
         switch object {
         case .activity(let inner):
-            innerType = inner.type
+            isUndoFollow = inner.type == "Follow"
         case .object(let inner):
-            innerType = inner.type
-        case .uri:
-            innerType = "Follow"
+            isUndoFollow = inner.type == "Follow"
+        case .uri(let uri):
+            isUndoFollow = uri == subscriber?.followActivityID
         }
 
-        if innerType == "Follow" {
-            let actorDomain = extractDomain(from: activity.actor) ?? activity.actor
-
-            guard let subscriber = try await req.repository.getSubscriber(domain: actorDomain)
-            else { return }
-
-            // Compare both the claimed actor and the actor that actually
-            // signed the request: the signature middleware only binds the
-            // signer to the activity actor's domain, so the body field
-            // alone could be set to the stored actor by any same-domain
-            // signer.
-            guard subscriber.actorID == activity.actor,
-                subscriber.actorID == verifiedActor.id
-            else {
-                req.logger.notice(
-                    "Undo actor \(activity.actor) signed by \(verifiedActor.id) does not match subscriber actor \(subscriber.actorID), ignoring"
-                )
-                return
-            }
-
-            // Only honor an Undo that references the currently stored Follow;
-            // a stale Undo for a superseded Follow must not remove the
-            // subscriber that re-followed since.
-            let matchesCurrentFollow: Bool
-            switch object {
-            case .activity(let inner):
-                matchesCurrentFollow =
-                    inner.id == subscriber.followActivityID
-                    && inner.actor == subscriber.actorID
-            case .object(let inner):
-                matchesCurrentFollow =
-                    inner.id == subscriber.followActivityID
-                    && (inner.actor == nil || inner.actor == subscriber.actorID)
-            case .uri(let uri):
-                matchesCurrentFollow = uri == subscriber.followActivityID
-            }
-
-            guard matchesCurrentFollow else {
-                req.logger.notice(
-                    "Undo object from \(actorDomain) does not reference current Follow, ignoring"
-                )
-                return
-            }
-
-            // A matching Undo removes the record even for a rejected
-            // subscriber: the remote's withdrawal is honored, and a domain
-            // shedding the sticky rejected state (see handleFollow) via
-            // Undo + re-Follow is an accepted trade-off — persistent
-            // abusers belong on the block list.
-            //
-            // LitePub: if we had an outbound Follow, send Undo Follow back.
-            try await subscriber.dispatchUndoFollowIfNeeded(on: req.queue)
-            try await req.repository.deleteSubscriber(domain: actorDomain)
-            req.logger.notice("Removed subscriber: \(actorDomain)")
-        } else {
+        guard isUndoFollow else {
             try await handleActivity(activity: activity, body: body, req: req)
+            return
         }
+
+        guard let subscriber else { return }
+
+        // Compare both the claimed actor and the actor that actually
+        // signed the request: the signature middleware only binds the
+        // signer to the activity actor's domain, so the body field
+        // alone could be set to the stored actor by any same-domain
+        // signer.
+        guard subscriber.actorID == activity.actor,
+            subscriber.actorID == verifiedActor.id
+        else {
+            req.logger.notice(
+                "Undo actor \(activity.actor) signed by \(verifiedActor.id) does not match subscriber actor \(subscriber.actorID), ignoring"
+            )
+            return
+        }
+
+        // Only honor an Undo that references the currently stored Follow;
+        // a stale Undo for a superseded Follow must not remove the
+        // subscriber that re-followed since. (For a URI-only object this
+        // already held when classifying above, but the embedded forms are
+        // re-checked here against the id and actor.)
+        let matchesCurrentFollow: Bool
+        switch object {
+        case .activity(let inner):
+            matchesCurrentFollow =
+                inner.id == subscriber.followActivityID
+                && inner.actor == subscriber.actorID
+        case .object(let inner):
+            matchesCurrentFollow =
+                inner.id == subscriber.followActivityID
+                && (inner.actor == nil || inner.actor == subscriber.actorID)
+        case .uri(let uri):
+            matchesCurrentFollow = uri == subscriber.followActivityID
+        }
+
+        guard matchesCurrentFollow else {
+            req.logger.notice(
+                "Undo object from \(actorDomain) does not reference current Follow, ignoring"
+            )
+            return
+        }
+
+        // A matching Undo removes the record even for a rejected
+        // subscriber: the remote's withdrawal is honored, and a domain
+        // shedding the sticky rejected state (see handleFollow) via
+        // Undo + re-Follow is an accepted trade-off — persistent
+        // abusers belong on the block list.
+        //
+        // LitePub: if we had an outbound Follow, send Undo Follow back.
+        try await subscriber.dispatchUndoFollowIfNeeded(on: req.queue)
+        try await req.repository.deleteSubscriber(domain: actorDomain)
+        req.logger.notice("Removed subscriber: \(actorDomain)")
     }
 
     // MARK: - Activity (Broadcast)

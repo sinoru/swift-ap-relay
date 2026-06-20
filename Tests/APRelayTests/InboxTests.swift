@@ -674,6 +674,56 @@ struct InboxTests {
         }
     }
 
+    @Test("Undo with URI-only non-Follow object is broadcast, not dropped")
+    func undoURIObjectNonFollowIsBroadcast() async throws {
+        try await withApp(configure: testConfigure) { app in
+            let sender = Subscriber(
+                domain: TestSigning.testActorDomain,
+                inboxURL: TestSigning.testInboxURL,
+                actorID: TestSigning.testActorID,
+                state: .accepted,
+                followActivityID: "https://remote.example/activities/follow-1",
+                createdAt: Date(),
+                updatedAt: Date()
+            )
+            try await app.repository.saveSubscriber(sender)
+
+            let other = Subscriber(
+                domain: "other.example",
+                inboxURL: "https://other.example/inbox",
+                actorID: "https://other.example/actor",
+                state: .accepted,
+                followActivityID: "https://other.example/activities/follow-1",
+                createdAt: Date(),
+                updatedAt: Date()
+            )
+            try await app.repository.saveSubscriber(other)
+
+            // A URI-only Undo whose object is some other activity (e.g. an
+            // un-boost), not the stored Follow. It must be relayed via the
+            // broadcast path rather than silently dropped as a non-matching
+            // Undo Follow.
+            let activity = TestSigning.makeUndoActivity(
+                followID: "https://remote.example/activities/announce-1",
+                objectAsURI: true
+            )
+            let (headers, body) = try TestSigning.signedRequest(activity: activity)
+
+            try await app.testing().test(.POST, "inbox", headers: headers, body: body) {
+                res async in
+                #expect(res.status == .accepted)
+            }
+
+            // Neither subscriber is removed, and the Undo is delivered to the
+            // other subscriber's inbox.
+            let subscribers = try await app.repository.getAllSubscribers(state: nil)
+            #expect(subscribers.count == 2)
+
+            let deliveries = app.queues.asyncTest.all(DeliveryJob.self)
+            #expect(deliveries.contains { $0.inboxURL == "https://other.example/inbox" })
+        }
+    }
+
     // MARK: - LitePub Mutual Follow
 
     @Test("Follow with relay actor URL dispatches follow back (LitePub)")
