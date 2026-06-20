@@ -33,4 +33,18 @@ extension Request {
         }
         return RedisActivityDeduplicator(redis: self.application.redis)
     }
+
+    /// Best-effort release of a deduplication slot for a rejected activity.
+    ///
+    /// Releasing the slot is a hardening optimization, not a correctness
+    /// requirement: a failure only means the rejected id stays reserved until
+    /// its TTL expires (the prior behavior), so it is logged rather than
+    /// propagated and never turns an ignored activity into a 5xx response.
+    func releaseDeduplicationSlot(_ activityID: String) async {
+        do {
+            try await activityDeduplicator.forget(activityID)
+        } catch {
+            logger.warning("Failed to release deduplication slot for \(activityID): \(error)")
+        }
+    }
 }

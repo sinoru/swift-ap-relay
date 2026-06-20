@@ -117,7 +117,7 @@ struct InboxController: RouteCollection {
         // reserved for this id so a spoofed Follow cannot block the real
         // actor's later, correctly signed Follow with the same id.
         guard activity.actor == verifiedActor.id else {
-            try await req.activityDeduplicator.forget(activity.id)
+            await req.releaseDeduplicationSlot(activity.id)
             req.logger.notice(
                 "Follow actor \(activity.actor) does not match signer \(verifiedActor.id), ignoring"
             )
@@ -299,7 +299,7 @@ struct InboxController: RouteCollection {
         guard subscriber.actorID == activity.actor,
             subscriber.actorID == verifiedActor.id
         else {
-            try await req.activityDeduplicator.forget(activity.id)
+            await req.releaseDeduplicationSlot(activity.id)
             req.logger.notice(
                 "Undo actor \(activity.actor) signed by \(verifiedActor.id) does not match subscriber actor \(subscriber.actorID), ignoring"
             )
@@ -474,7 +474,7 @@ struct InboxController: RouteCollection {
             // Release the dedup slot so a spoofed Accept/Reject cannot block
             // the real actor's later, correctly signed response with the
             // same id.
-            try await req.activityDeduplicator.forget(activity.id)
+            await req.releaseDeduplicationSlot(activity.id)
             req.logger.notice(
                 "\(activity.type) actor \(activity.actor) signed by \(verifiedActor.id) does not match subscriber actor \(subscriber.actorID), ignoring"
             )

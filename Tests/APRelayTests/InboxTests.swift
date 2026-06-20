@@ -284,6 +284,41 @@ struct InboxTests {
         }
     }
 
+    @Test("URI-only Undo matching current Follow but signed by a different actor keeps subscriber")
+    func undoURIObjectSignedByDifferentActorKeepsSubscriber() async throws {
+        try await withApp(configure: { app in
+            try await testConfigure(app)
+            // The signature verifies, but it resolves to a different actor
+            // on the subscriber's domain.
+            app.actorFetcher = MockActorFetcher(id: "https://remote.example/other-actor")
+        }) { app in
+            let sub = Subscriber(
+                domain: TestSigning.testActorDomain,
+                inboxURL: TestSigning.testInboxURL,
+                actorID: TestSigning.testActorID,
+                state: .accepted,
+                followActivityID: "https://remote.example/activities/follow-1",
+                createdAt: Date(),
+                updatedAt: Date()
+            )
+            try await app.repository.saveSubscriber(sub)
+
+            // A bare-URI Undo whose URI matches the stored Follow, so it is an
+            // Undo Follow — but the request is signed by other-actor, so the
+            // delete must not happen.
+            let activity = TestSigning.makeUndoActivity(objectAsURI: true)
+            let (headers, body) = try TestSigning.signedRequest(activity: activity)
+
+            try await app.testing().test(.POST, "inbox", headers: headers, body: body) {
+                res async in
+                #expect(res.status == .accepted)
+            }
+
+            let subscribers = try await app.repository.getAllSubscribers(state: nil)
+            #expect(subscribers.count == 1)
+        }
+    }
+
     @Test("Undo with stale nested Follow keeps subscriber")
     func undoStaleNestedFollowKeepsSubscriber() async throws {
         try await withApp(configure: testConfigure) { app in
