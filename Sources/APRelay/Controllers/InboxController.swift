@@ -113,8 +113,11 @@ struct InboxController: RouteCollection {
         // The stored actorID is what handleUndo and
         // validateOutboundFollowResponse later compare the verified signer
         // against, so bind it to the signature here rather than trusting
-        // the unauthenticated body field.
+        // the unauthenticated body field. Release the dedup slot the inbox
+        // reserved for this id so a spoofed Follow cannot block the real
+        // actor's later, correctly signed Follow with the same id.
         guard activity.actor == verifiedActor.id else {
+            try await req.activityDeduplicator.forget(activity.id)
             req.logger.notice(
                 "Follow actor \(activity.actor) does not match signer \(verifiedActor.id), ignoring"
             )
@@ -237,72 +240,78 @@ struct InboxController: RouteCollection {
 
         let actorDomain = extractDomain(from: activity.actor) ?? activity.actor
 
-        // Classify the Undo. An embedded object carries its own type, so a
-        // non-Follow Undo (e.g. an un-boost) is recognized without a
-        // repository read here. A URI-only object is opaque, so it is
-        // treated as an Undo Follow only when it references the subscriber's
-        // currently stored Follow — that case needs the lookup to classify.
-        // Any other Undo — a non-Follow activity sent as a bare URI, or a
-        // stale Undo Follow URI for a superseded Follow — falls through to
-        // the broadcast path instead of being silently dropped.
-        var subscriber: Subscriber?
-        let isUndoFollow: Bool
+        // Identify the Follow this Undo references in a single pass. An
+        // embedded object declares its own type and carries the referenced
+        // Follow's id (and inner actor, for a full activity), so a non-Follow
+        // Undo (e.g. an un-boost) is recognized and relayed without a
+        // repository read. A bare URI is opaque: it is only an Undo Follow
+        // when it references the subscriber's stored Follow, which is decided
+        // against the lookup below.
+        let referencedFollowID: String?
+        let referencedInnerActor: String?
+        let isBareURI: Bool
         switch object {
         case .activity(let inner):
-            isUndoFollow = inner.type == "Follow"
+            guard inner.type == "Follow" else {
+                try await handleActivity(activity: activity, body: body, req: req)
+                return
+            }
+            referencedFollowID = inner.id
+            referencedInnerActor = inner.actor
+            isBareURI = false
         case .object(let inner):
-            isUndoFollow = inner.type == "Follow"
+            guard inner.type == "Follow" else {
+                try await handleActivity(activity: activity, body: body, req: req)
+                return
+            }
+            referencedFollowID = inner.id
+            referencedInnerActor = inner.actor
+            isBareURI = false
         case .uri(let uri):
-            subscriber = try await req.repository.getSubscriber(domain: actorDomain)
-            isUndoFollow = uri == subscriber?.followActivityID
+            referencedFollowID = uri
+            referencedInnerActor = nil
+            isBareURI = true
         }
 
-        guard isUndoFollow else {
+        guard let subscriber = try await req.repository.getSubscriber(domain: actorDomain) else {
+            // A bare-URI Undo may still be a non-Follow activity to relay
+            // (handleActivity ignores a non-subscriber); an embedded Undo
+            // Follow with no subscriber has nothing to act on.
+            if isBareURI {
+                try await handleActivity(activity: activity, body: body, req: req)
+            }
+            return
+        }
+
+        // A bare URI that does not reference the stored Follow is a non-Follow
+        // Undo (e.g. an un-boost); relay it rather than dropping it.
+        if isBareURI, referencedFollowID != subscriber.followActivityID {
             try await handleActivity(activity: activity, body: body, req: req)
             return
         }
 
-        // An embedded Undo Follow deferred its lookup to here so non-Follow
-        // undos never pay for it; the URI case already fetched above.
-        if subscriber == nil {
-            subscriber = try await req.repository.getSubscriber(domain: actorDomain)
-        }
-        guard let subscriber else { return }
-
-        // Compare both the claimed actor and the actor that actually
-        // signed the request: the signature middleware only binds the
-        // signer to the activity actor's domain, so the body field
-        // alone could be set to the stored actor by any same-domain
-        // signer.
+        // Compare both the claimed actor and the actor that actually signed
+        // the request: the signature middleware only binds the signer to the
+        // activity actor's domain, so the body field alone could be set to
+        // the stored actor by any same-domain signer. On a mismatch, release
+        // the dedup slot so a spoofed Undo cannot block the real actor's
+        // later, correctly signed activity with the same id.
         guard subscriber.actorID == activity.actor,
             subscriber.actorID == verifiedActor.id
         else {
+            try await req.activityDeduplicator.forget(activity.id)
             req.logger.notice(
                 "Undo actor \(activity.actor) signed by \(verifiedActor.id) does not match subscriber actor \(subscriber.actorID), ignoring"
             )
             return
         }
 
-        // Only honor an Undo that references the currently stored Follow;
-        // a stale Undo for a superseded Follow must not remove the
-        // subscriber that re-followed since. (For a URI-only object this
-        // already held when classifying above, but the embedded forms are
-        // re-checked here against the id and actor.)
-        let matchesCurrentFollow: Bool
-        switch object {
-        case .activity(let inner):
-            matchesCurrentFollow =
-                inner.id == subscriber.followActivityID
-                && inner.actor == subscriber.actorID
-        case .object(let inner):
-            matchesCurrentFollow =
-                inner.id == subscriber.followActivityID
-                && (inner.actor == nil || inner.actor == subscriber.actorID)
-        case .uri(let uri):
-            matchesCurrentFollow = uri == subscriber.followActivityID
-        }
-
-        guard matchesCurrentFollow else {
+        // Only honor an Undo that references the currently stored Follow; a
+        // stale Undo for a superseded Follow must not remove the subscriber
+        // that re-followed since. (A bare URI already matched above.)
+        guard referencedFollowID == subscriber.followActivityID,
+            referencedInnerActor == nil || referencedInnerActor == subscriber.actorID
+        else {
             req.logger.notice(
                 "Undo object from \(actorDomain) does not reference current Follow, ignoring"
             )
@@ -462,6 +471,10 @@ struct InboxController: RouteCollection {
         guard subscriber.actorID == activity.actor,
             subscriber.actorID == verifiedActor.id
         else {
+            // Release the dedup slot so a spoofed Accept/Reject cannot block
+            // the real actor's later, correctly signed response with the
+            // same id.
+            try await req.activityDeduplicator.forget(activity.id)
             req.logger.notice(
                 "\(activity.type) actor \(activity.actor) signed by \(verifiedActor.id) does not match subscriber actor \(subscriber.actorID), ignoring"
             )

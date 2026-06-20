@@ -24,4 +24,9 @@ struct RedisActivityDeduplicator: ActivityDeduplicating, Sendable {
         ).get()
         return result == .conditionNotMet
     }
+
+    func forget(_ activityID: String) async throws {
+        let key: RedisKey = "activity_dedup:\(activityID)"
+        _ = try await redis.delete(key).get()
+    }
 }

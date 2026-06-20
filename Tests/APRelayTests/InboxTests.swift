@@ -989,6 +989,43 @@ struct InboxTests {
         }
     }
 
+    @Test("Signer-mismatched Follow does not block a later correctly signed Follow with the same id")
+    func ignoredFollowReleasesDedupSlot() async throws {
+        try await withApp(configure: { app in
+            try await testConfigure(app)
+            // The first request resolves to a different actor than it claims,
+            // so handleFollow ignores it.
+            app.actorFetcher = MockActorFetcher(id: "https://remote.example/other-actor")
+        }) { app in
+            let activityID = "https://remote.example/activities/follow-shared-id"
+
+            // Spoofed Follow: claims testActorID but is signed by other-actor.
+            let spoof = TestSigning.makeFollowActivity(id: activityID)
+            let (spoofHeaders, spoofBody) = try TestSigning.signedRequest(activity: spoof)
+            try await app.testing().test(.POST, "inbox", headers: spoofHeaders, body: spoofBody) {
+                res async in
+                #expect(res.status == .accepted)
+            }
+            // Ignored: no subscriber created.
+            #expect(try await app.repository.getAllSubscribers(state: nil).isEmpty)
+
+            // The real actor now signs a Follow reusing the same activity id.
+            app.actorFetcher = MockActorFetcher(id: TestSigning.testActorID)
+            let real = TestSigning.makeFollowActivity(id: activityID)
+            let (realHeaders, realBody) = try TestSigning.signedRequest(activity: real)
+            try await app.testing().test(.POST, "inbox", headers: realHeaders, body: realBody) {
+                res async in
+                #expect(res.status == .accepted)
+            }
+
+            // The dedup slot reserved by the spoof was released, so the real
+            // Follow is processed instead of being dropped as a duplicate.
+            let subscribers = try await app.repository.getAllSubscribers(state: nil)
+            #expect(subscribers.count == 1)
+            #expect(subscribers.first?.actorID == TestSigning.testActorID)
+        }
+    }
+
     // MARK: - Domain Blocking
 
     @Test("Activity from blocked domain returns 403")

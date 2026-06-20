@@ -7,4 +7,8 @@ actor MockActivityDeduplicator: ActivityDeduplicating {
     func isDuplicate(_ activityID: String) async throws -> Bool {
         !seen.insert(activityID).inserted
     }
+
+    func forget(_ activityID: String) async throws {
+        seen.remove(activityID)
+    }
 }
