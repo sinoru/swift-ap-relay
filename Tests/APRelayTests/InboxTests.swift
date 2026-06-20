@@ -1080,6 +1080,37 @@ struct InboxTests {
         }
     }
 
+    @Test("Follow rejected while blocked is honored after the domain is unblocked, same id")
+    func unblockedDomainCanReuseActivityID() async throws {
+        try await withApp(configure: testConfigure) { app in
+            _ = try await app.repository.blockDomain(
+                TestSigning.testActorDomain, reason: "test"
+            )
+
+            let activityID = "https://remote.example/activities/follow-while-blocked"
+            let activity = TestSigning.makeFollowActivity(id: activityID)
+            let (headers, body) = try TestSigning.signedRequest(activity: activity)
+
+            // Blocked: rejected with 403, and no deduplication slot is reserved.
+            try await app.testing().test(.POST, "inbox", headers: headers, body: body) {
+                res async in
+                #expect(res.status == .forbidden)
+            }
+
+            _ = try await app.repository.unblockDomain(TestSigning.testActorDomain)
+
+            // The instance re-delivers the same activity id after the unblock.
+            try await app.testing().test(.POST, "inbox", headers: headers, body: body) {
+                res async in
+                #expect(res.status == .accepted)
+            }
+
+            // The retry is processed rather than absorbed as a duplicate.
+            let subscribers = try await app.repository.getAllSubscribers(state: nil)
+            #expect(subscribers.count == 1)
+        }
+    }
+
     // MARK: - Restricted Mode
 
     @Test("Activity from non-allowed domain in restricted mode returns 403")

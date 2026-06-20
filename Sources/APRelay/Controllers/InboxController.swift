@@ -39,6 +39,19 @@ struct InboxController: RouteCollection {
 
         req.logger.info("Received \(activity.type) from \(activityActorDomain)")
 
+        // Reject blocked or non-allowlisted domains before reserving a
+        // deduplication slot, so that a domain which is later unblocked or
+        // added to the allowlist can re-deliver the same activity id instead
+        // of having it absorbed as a duplicate.
+        if try await req.repository.isBlocked(domain: activityActorDomain) {
+            throw Abort(.forbidden, reason: "Domain is blocked")
+        }
+        if req.relayConfig.restrictedMode,
+            try await !req.repository.isAllowed(domain: activityActorDomain)
+        {
+            throw Abort(.forbidden, reason: "Domain is not in allowlist")
+        }
+
         // Duplicate detection.
         if try await req.activityDeduplicator.isDuplicate(activity.id) {
             req.logger.info("Duplicate activity ignored: \(activity.id)")
@@ -54,23 +67,6 @@ struct InboxController: RouteCollection {
             span.attributes["activity.type"] = activity.type
             span.attributes["activity.actor"] = activity.actor
             span.attributes["activity.id"] = activity.id
-
-            let config = req.relayConfig
-            let repository = req.repository
-
-            // Check if domain is blocked.
-            let actorDomain = extractDomain(from: activity.actor)
-            if let domain = actorDomain {
-                if try await repository.isBlocked(domain: domain) {
-                    throw Abort(.forbidden, reason: "Domain is blocked")
-                }
-
-                if config.restrictedMode {
-                    if try await !repository.isAllowed(domain: domain) {
-                        throw Abort(.forbidden, reason: "Domain is not in allowlist")
-                    }
-                }
-            }
 
             switch activity.type {
             case "Follow":
@@ -110,12 +106,14 @@ struct InboxController: RouteCollection {
         let config = req.relayConfig
         let repository = req.repository
 
-        // The stored actorID is what handleUndo and
-        // validateOutboundFollowResponse later compare the verified signer
-        // against, so bind it to the signature here rather than trusting
-        // the unauthenticated body field. Release the dedup slot the inbox
-        // reserved for this id so a spoofed Follow cannot block the real
-        // actor's later, correctly signed Follow with the same id.
+        // This handler stores activity.actor as the subscriber's actorID, and
+        // handleUndo / validateOutboundFollowResponse later require the
+        // verified signer (verifiedActor.id) to equal that stored actorID. So
+        // only store activity.actor once it is confirmed to be the signer
+        // here, rather than trusting the unauthenticated body field. Release
+        // the dedup slot the inbox reserved for this id so a spoofed Follow
+        // cannot block the real actor's later, correctly signed Follow with
+        // the same id.
         guard activity.actor == verifiedActor.id else {
             await req.releaseDeduplicationSlot(activity.id)
             req.logger.notice(
@@ -312,7 +310,11 @@ struct InboxController: RouteCollection {
         guard referencedFollowID == subscriber.followActivityID,
             referencedInnerActor == nil || referencedInnerActor == subscriber.actorID
         else {
-            req.logger.notice(
+            // The signer was already verified above; this is a verified
+            // subscriber referencing a stale/non-current Follow, which is a
+            // content mismatch (info) rather than a signer-identity anomaly
+            // (notice).
+            req.logger.info(
                 "Undo object from \(actorDomain) does not reference current Follow, ignoring"
             )
             return
