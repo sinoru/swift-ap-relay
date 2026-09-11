@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Follow activities whose actor does not match the verified HTTP signature signer are now ignored, so the stored subscriber identity is always signature-bound
 - Undo with a bare-URI object that does not reference the stored Follow is now relayed through the normal broadcast path instead of being silently dropped, so URI-encoded Undo of non-Follow activities (e.g. an un-boost) is no longer lost
 - Blocked and restricted-mode domains are now rejected before an activity reserves a deduplication slot, so once such a domain is unblocked or allowlisted it can re-deliver the same activity id instead of having it silently absorbed as a duplicate until the TTL expires
+- Building from a checkout whose path contains spaces no longer fails in the version generator plugin
 
 ### Security
 

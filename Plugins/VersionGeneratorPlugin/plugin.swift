@@ -41,7 +41,7 @@ struct VersionGeneratorPlugin: BuildToolPlugin {
             .prebuildCommand(
                 displayName: "Generate build version info",
                 executable: URL(fileURLWithPath: "/bin/sh"),
-                arguments: [scriptFile.path(), outputFile.path()],
+                arguments: [scriptFile.path(percentEncoded: false), outputFile.path(percentEncoded: false)],
                 outputFilesDirectory: outputDir
             ),
         ]
