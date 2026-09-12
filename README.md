@@ -70,6 +70,14 @@ swift test
 docker run --rm -v "$(pwd):/build" -w /build swift:6.3-noble swift test
 ```
 
+#### Redis Integration Tests
+
+The Redis repository tests are skipped unless `REDIS_TEST_URL` points at a live Redis or Valkey instance. They only touch keys for `*.redis-test.example` domains and one `redis-test.*` setting, but use a dedicated database index anyway:
+
+```bash
+REDIS_TEST_URL=redis://127.0.0.1:6379/15 swift test --filter RedisRelayRepositoryTests
+```
+
 #### HTML Snapshots
 
 To visually inspect the rendered homepage without running the server, generate self-contained HTML snapshots by setting the `HTML_SNAPSHOT_DIR` environment variable:

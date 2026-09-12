@@ -166,7 +166,7 @@ struct InboxController: RouteCollection {
                 existing.outboundFollowActivityID = "\(config.baseURL)/activities/\(UUID().uuidString)"
             }
 
-            try await repository.saveSubscriber(existing)
+            try await save(existing, activityID: activity.id, req: req)
             currentSubscriber = existing
         } else {
             var subscriber = Subscriber(
@@ -185,7 +185,7 @@ struct InboxController: RouteCollection {
                 subscriber.outboundFollowActivityID = "\(config.baseURL)/activities/\(UUID().uuidString)"
             }
 
-            try await repository.saveSubscriber(subscriber)
+            try await save(subscriber, activityID: activity.id, req: req)
             currentSubscriber = subscriber
         }
 
@@ -223,6 +223,19 @@ struct InboxController: RouteCollection {
                 InstanceInfoFetchPayload(domain: actorDomain),
                 maxRetryCount: 0
             )
+        }
+    }
+
+    /// Persists a Follow's subscriber record, refusing it if the domain was
+    /// blocked after the inbox check.
+    ///
+    /// The repository refuses the write atomically for a blocked domain. Like
+    /// the inbox's own blocked-domain rejection, release the dedup slot so an
+    /// unblock lets the instance re-deliver the same Follow id.
+    private func save(_ subscriber: Subscriber, activityID: String, req: Request) async throws {
+        guard try await req.repository.saveSubscriber(subscriber) else {
+            await req.releaseDeduplicationSlot(activityID)
+            throw Abort(.forbidden, reason: "Domain is blocked")
         }
     }
 

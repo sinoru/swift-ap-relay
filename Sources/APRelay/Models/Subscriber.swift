@@ -1,7 +1,7 @@
 import Queues
 import Vapor
 
-enum SubscriberState: String, Codable, Sendable {
+enum SubscriberState: String, CaseIterable, Codable, Sendable {
     case pending
     case accepted
     case rejected

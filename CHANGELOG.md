@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Accept/Reject responses to the relay's outbound Follow are now honored only when signed by the stored subscriber actor
 - Follow activities whose actor does not match the verified HTTP signature signer are now ignored, so the stored subscriber identity is always signature-bound
 - Undo with a bare-URI object that does not reference the stored Follow is now relayed through the normal broadcast path instead of being silently dropped, so URI-encoded Undo of non-Follow activities (e.g. an un-boost) is no longer lost
+- Subscriber writes are now atomic Lua scripts in Redis: the subscriber hash and its state/all index sets can no longer disagree when two replicas (or a Follow and an admin action) write the same domain concurrently, and delete cleans up every state set
+- A Follow or admin accept/reject racing an admin block can no longer reinstate the blocked domain; the repository refuses the write atomically (inbox responds 403 and releases the dedup slot, admin API responds 409)
+- Signing key bootstrap now uses `HSETNX`, so replicas booting simultaneously against an empty store all adopt the same key pair instead of the last writer overwriting the others
 - Blocked and restricted-mode domains are now rejected before an activity reserves a deduplication slot, so once such a domain is unblocked or allowlisted it can re-deliver the same activity id instead of having it silently absorbed as a duplicate until the TTL expires
 - Building from a checkout whose path contains spaces no longer fails in the version generator plugin
 

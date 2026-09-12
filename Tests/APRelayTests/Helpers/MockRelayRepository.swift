@@ -28,8 +28,10 @@ actor MockRelayRepository: RelayRepository {
             .map(\.inboxURL)
     }
 
-    func saveSubscriber(_ subscriber: Subscriber) async throws {
+    func saveSubscriber(_ subscriber: Subscriber) async throws -> Bool {
+        guard !blockedDomains.contains(subscriber.domain) else { return false }
         subscribers[subscriber.domain] = subscriber
+        return true
     }
 
     func deleteSubscriber(domain: String) async throws {
@@ -84,5 +86,11 @@ actor MockRelayRepository: RelayRepository {
 
     func setSetting(key: String, value: String) async throws {
         settings[key] = value
+    }
+
+    func setSettingIfAbsent(key: String, value: String) async throws -> Bool {
+        guard settings[key] == nil else { return false }
+        settings[key] = value
+        return true
     }
 }
