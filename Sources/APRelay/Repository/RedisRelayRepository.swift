@@ -73,54 +73,39 @@ struct RedisRelayRepository: RelayRepository, Sendable {
         return results.compactMap(\.string)
     }
 
-    func saveSubscriber(_ subscriber: Subscriber) async throws {
-        let key = subscriberKey(subscriber.domain)
+    func saveSubscriber(_ subscriber: Subscriber) async throws -> Bool {
         let now = formatDate(Date())
-
-        // Check existing state for set index management.
-        let existingState = try await redis.hget("state", from: key).get().string
-
-        let createdAt: String
-        if let existing = try await redis.hget("createdAt", from: key).get().string {
-            createdAt = existing
-        } else {
-            createdAt = subscriber.createdAt.map { formatDate($0) } ?? now
-        }
-
-        let fields: [String: RESPValue] = [
-            "inboxURL": .init(from: subscriber.inboxURL),
-            "actorID": .init(from: subscriber.actorID),
-            "state": .init(from: subscriber.state.rawValue),
-            "followActivityID": .init(from: subscriber.followActivityID),
-            "followObjectURI": .init(from: subscriber.followObjectURI ?? ""),
-            "outboundFollowActivityID": .init(from: subscriber.outboundFollowActivityID ?? ""),
-            "createdAt": .init(from: createdAt),
-            "updatedAt": .init(from: now),
-        ]
-        _ = try await redis.hmset(fields, in: key).get()
-        _ = try await redis.sadd(subscriber.domain, to: allSubscribersKey).get()
-
-        // Move between state sets if state changed.
-        if let old = existingState, old != subscriber.state.rawValue,
-            let oldState = SubscriberState(rawValue: old)
-        {
-            _ = try await redis.srem(subscriber.domain, from: stateSetKey(oldState)).get()
-        }
-        _ = try await redis.sadd(subscriber.domain, to: stateSetKey(subscriber.state)).get()
+        let otherStates = SubscriberState.allCases.filter { $0 != subscriber.state }
+        let result = try await eval(
+            Self.saveSubscriberScript,
+            keys: [
+                subscriberKey(subscriber.domain),
+                allSubscribersKey,
+                blockedDomainsSetKey,
+                stateSetKey(subscriber.state),
+            ] + otherStates.map { stateSetKey($0) },
+            arguments: [
+                subscriber.domain,
+                subscriber.createdAt.map { formatDate($0) } ?? now,
+                now,
+                "inboxURL", subscriber.inboxURL,
+                "actorID", subscriber.actorID,
+                "state", subscriber.state.rawValue,
+                "followActivityID", subscriber.followActivityID,
+                "followObjectURI", subscriber.followObjectURI ?? "",
+                "outboundFollowActivityID", subscriber.outboundFollowActivityID ?? "",
+            ]
+        )
+        return result.int == 1
     }
 
     func deleteSubscriber(domain: String) async throws {
-        let stateValue = try await redis.hget("state", from: subscriberKey(domain)).get().string
-
-        _ = try await redis.send(
-            command: "DEL",
-            with: [.init(from: subscriberKey(domain).rawValue)]
-        ).get()
-        _ = try await redis.srem(domain, from: allSubscribersKey).get()
-
-        if let stateRaw = stateValue, let state = SubscriberState(rawValue: stateRaw) {
-            _ = try await redis.srem(domain, from: stateSetKey(state)).get()
-        }
+        _ = try await eval(
+            Self.deleteSubscriberScript,
+            keys: [subscriberKey(domain), allSubscribersKey]
+                + SubscriberState.allCases.map { stateSetKey($0) },
+            arguments: [domain]
+        )
     }
 
     // MARK: - Blocked Domains
@@ -186,6 +171,60 @@ struct RedisRelayRepository: RelayRepository, Sendable {
 
     func setSetting(key: String, value: String) async throws {
         _ = try await redis.hset(key, to: value, in: settingsKey).get()
+    }
+
+    func setSettingIfAbsent(key: String, value: String) async throws -> Bool {
+        try await redis.hsetnx(key, to: value, in: settingsKey).get()
+    }
+
+    // MARK: - Atomic Scripts
+
+    /// Every multi-key subscriber write runs as a single Lua script so that a
+    /// concurrent write from another replica (or an admin block) cannot
+    /// interleave with it and leave the hash and the index sets disagreeing.
+    ///
+    /// KEYS: [1] subscriber hash, [2] all-subscribers set, [3] blocked-domains
+    /// set, [4] the set for the subscriber's state, [5...] the other state sets.
+    /// ARGV: [1] domain, [2] createdAt to use for a new record, [3] updatedAt,
+    /// [4...] alternating field names and values for the hash.
+    ///
+    /// Returns 1 when written, 0 when refused because the domain is blocked.
+    private static let saveSubscriberScript = """
+        if redis.call('SISMEMBER', KEYS[3], ARGV[1]) == 1 then
+            return 0
+        end
+        local createdAt = redis.call('HGET', KEYS[1], 'createdAt') or ARGV[2]
+        redis.call('HSET', KEYS[1], 'createdAt', createdAt, 'updatedAt', ARGV[3], unpack(ARGV, 4))
+        redis.call('SADD', KEYS[2], ARGV[1])
+        for i = 5, #KEYS do
+            redis.call('SREM', KEYS[i], ARGV[1])
+        end
+        redis.call('SADD', KEYS[4], ARGV[1])
+        return 1
+        """
+
+    /// KEYS: [1] subscriber hash, [2] all-subscribers set, [3...] every state
+    /// set. ARGV: [1] domain.
+    ///
+    /// The domain is removed from every state set rather than only the one
+    /// recorded in the hash, so a record left inconsistent by an interrupted
+    /// pre-script write is cleaned up as well.
+    private static let deleteSubscriberScript = """
+        redis.call('DEL', KEYS[1])
+        for i = 2, #KEYS do
+            redis.call('SREM', KEYS[i], ARGV[1])
+        end
+        """
+
+    private func eval(
+        _ script: String,
+        keys: [RedisKey],
+        arguments: [String]
+    ) async throws -> RESPValue {
+        var command: [RESPValue] = [.init(from: script), .init(from: keys.count)]
+        command += keys.map { RESPValue(from: $0) }
+        command += arguments.map { RESPValue(from: $0) }
+        return try await redis.send(command: "EVAL", with: command).get()
     }
 
     // MARK: - Decoding Helpers

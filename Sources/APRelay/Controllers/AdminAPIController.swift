@@ -41,7 +41,9 @@ struct AdminAPIController: RouteCollection {
             subscriber.outboundFollowActivityID = "\(req.relayConfig.baseURL)/activities/\(UUID().uuidString)"
         }
 
-        try await req.repository.saveSubscriber(subscriber)
+        guard try await req.repository.saveSubscriber(subscriber) else {
+            throw Abort(.conflict, reason: "Domain is blocked")
+        }
 
         try await req.queue.dispatch(
             AcceptJob.self,
@@ -107,7 +109,9 @@ struct AdminAPIController: RouteCollection {
         try await subscriber.dispatchUndoFollowIfNeeded(on: req.queue)
         subscriber.outboundFollowActivityID = nil
 
-        try await req.repository.saveSubscriber(subscriber)
+        guard try await req.repository.saveSubscriber(subscriber) else {
+            throw Abort(.conflict, reason: "Domain is blocked")
+        }
 
         return AdminResponse(status: "rejected", domain: domain)
     }

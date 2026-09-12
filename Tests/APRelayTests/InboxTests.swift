@@ -1111,6 +1111,46 @@ struct InboxTests {
         }
     }
 
+    @Test("Follow whose domain is blocked after the inbox check is refused and releases its id")
+    func blockedBetweenCheckAndSave() async throws {
+        // The block lands between the inbox's blocked-domain check and the
+        // subscriber write: the check still reads "not blocked", but the
+        // repository refuses the write.
+        let base = MockRelayRepository()
+        _ = try await base.blockDomain(TestSigning.testActorDomain, reason: "test")
+        let repository = StaleReadRelayRepository(
+            base: base,
+            staleUnblockedDomains: [TestSigning.testActorDomain]
+        )
+
+        try await withApp(configure: { app in
+            try await testConfigure(app)
+            app.repositoryOverride = repository
+        }) { app in
+            let activityID = "https://remote.example/activities/follow-during-block"
+            let activity = TestSigning.makeFollowActivity(id: activityID)
+            let (headers, body) = try TestSigning.signedRequest(activity: activity)
+
+            try await app.testing().test(.POST, "inbox", headers: headers, body: body) {
+                res async in
+                #expect(res.status == .forbidden)
+            }
+
+            // Nothing was stored and no Accept was sent to the blocked domain.
+            #expect(try await base.getAllSubscribers(state: nil).isEmpty)
+            #expect(app.queues.asyncTest.all(AcceptJob.self).isEmpty)
+
+            // After an unblock, the same Follow id is processed rather than
+            // absorbed as a duplicate.
+            _ = try await base.unblockDomain(TestSigning.testActorDomain)
+            try await app.testing().test(.POST, "inbox", headers: headers, body: body) {
+                res async in
+                #expect(res.status == .accepted)
+            }
+            #expect(try await base.getAllSubscribers(state: nil).count == 1)
+        }
+    }
+
     // MARK: - Restricted Mode
 
     @Test("Activity from non-allowed domain in restricted mode returns 403")

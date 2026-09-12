@@ -118,6 +118,37 @@ struct AdminAPITests {
         }
     }
 
+    @Test("POST accept returns 409 when the domain was blocked concurrently")
+    func acceptSubscriberBlockedConcurrently() async throws {
+        try await withApp(configure: testConfigure) { app in
+            let sub = Subscriber(
+                domain: "test.example",
+                inboxURL: "https://test.example/inbox",
+                actorID: "https://test.example/actor",
+                state: .pending,
+                followActivityID: "https://test.example/follow/1",
+                createdAt: Date(),
+                updatedAt: Date()
+            )
+            try await app.repository.saveSubscriber(sub)
+            // A block that has not yet removed the record: the accept's
+            // write must not reinstate it.
+            _ = try await app.repository.blockDomain("test.example", reason: nil)
+
+            try await app.testing().test(
+                .POST,
+                "api/admin/subscribers/test.example/accept",
+                headers: authHeaders
+            ) { res async in
+                #expect(res.status == .conflict)
+            }
+
+            let stored = try await app.repository.getSubscriber(domain: "test.example")
+            #expect(stored?.state == .pending)
+            #expect(app.queues.asyncTest.all(AcceptJob.self).isEmpty)
+        }
+    }
+
     @Test("POST reject changes state to rejected")
     func rejectSubscriber() async throws {
         try await withApp(configure: testConfigure) { app in
