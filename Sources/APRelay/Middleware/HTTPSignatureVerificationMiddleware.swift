@@ -87,30 +87,80 @@ struct HTTPSignatureVerificationMiddleware: AsyncMiddleware {
             }
         }
 
-        // Fetch the remote actor's public key.
+        // Fetch the document the keyID points at. It is normally the actor
+        // itself, but may be a standalone Key object (see RemoteActor).
         let keyID = components.keyID
-        let actorURL = resolveActorURL(from: keyID)
+        let actorURL = Self.resolveActorURL(from: keyID)
+        let fetched = try await fetchDocument(at: actorURL, request: request, keyID: keyID)
 
-        let remoteActor: RemoteActor
-        do {
-            remoteActor = try await request.application.actorFetcher.fetchActor(
-                url: actorURL,
-                client: request.client
+        guard let signingPEM = fetched.publicKey?.publicKeyPem ?? fetched.publicKeyPem else {
+            request.logger.warning("Signature verification failed: document at \(actorURL) carries no public key")
+            throw Self.genericFailure
+        }
+
+        // Verify the signature first so that a request whose signature does
+        // not even match the fetched key cannot trigger the second outbound
+        // fetch that authority confirmation may need.
+        try verifySignature(
+            request: request,
+            components: components,
+            publicKeyPEM: signingPEM,
+            keyID: keyID
+        )
+
+        // A valid signature only proves possession of the private key for
+        // whatever document the requester-controlled keyID pointed at; the
+        // document's self-declared `id` is not yet trustworthy. Confirm that
+        // the origin of that id actually vouches for the signing key.
+        let (trusted, trustedPEM) = try await confirmAuthority(
+            of: fetched,
+            fetchedFrom: actorURL,
+            components: components,
+            request: request
+        )
+
+        if let owner = trusted.publicKey?.owner, !ActorIdentity.matches(owner, trusted.id) {
+            request.logger.warning(
+                "Signature verification failed: publicKey.owner \(owner) does not match actor id \(trusted.id)"
             )
+            throw Self.genericFailure
+        }
+
+        // Store verified actor info for downstream handlers.
+        request.storage[VerifiedActorKey.self] = VerifiedActor(
+            id: trusted.id,
+            inbox: trusted.inbox,
+            sharedInbox: trusted.sharedInbox,
+            publicKeyPEM: trustedPEM
+        )
+
+        return try await next.respond(to: request)
+    }
+
+    private static let genericFailure = Abort(.unauthorized, reason: "Signature verification failed")
+
+    /// Fetches a remote document, masking the underlying error.
+    ///
+    /// The error may include the attacker-controlled URL, so it is logged
+    /// server-side only; an unauthenticated caller must not be able to use
+    /// error responses to confirm that the server reached a particular URL.
+    private func fetchDocument(at url: String, request: Request, keyID: String) async throws -> RemoteActor {
+        do {
+            return try await request.application.actorFetcher.fetchActor(url: url, client: request.client)
         } catch {
-            // Mask the underlying error (which may include the attacker-controlled
-            // actor URL) so that an unauthenticated caller cannot use error responses
-            // to confirm that the server reached a particular outbound URL.
-            request.logger.warning("Signature verification failed: actor fetch error for keyID=\(keyID): \(error)")
+            request.logger.warning("Signature verification failed: fetch error for \(url) (keyID=\(keyID)): \(error)")
             throw Self.genericFailure
         }
+    }
 
-        guard let publicKeyPEM = remoteActor.publicKey?.publicKeyPem else {
-            request.logger.warning("Signature verification failed: remote actor \(remoteActor.id) has no public key")
-            throw Self.genericFailure
-        }
-
-        // Verify the signature.
+    /// Verifies the request signature against `publicKeyPEM`, throwing the
+    /// uniform failure on any problem.
+    private func verifySignature(
+        request: Request,
+        components: SignatureComponents,
+        publicKeyPEM: String,
+        keyID: String
+    ) throws {
         let method = request.method.rawValue.lowercased()
         let path =
             request.url.path
@@ -140,31 +190,76 @@ struct HTTPSignatureVerificationMiddleware: AsyncMiddleware {
             request.logger.warning("Signature verification failed: signature invalid for keyID=\(keyID)")
             throw Self.genericFailure
         }
-
-        // Store verified actor info for downstream handlers.
-        request.storage[VerifiedActorKey.self] = VerifiedActor(
-            id: remoteActor.id,
-            inbox: remoteActor.inbox,
-            sharedInbox: remoteActor.sharedInbox,
-            publicKeyPEM: publicKeyPEM
-        )
-
-        return try await next.respond(to: request)
     }
 
-    private static let genericFailure = Abort(.unauthorized, reason: "Signature verification failed")
+    /// Resolves the actor document that is authoritative for the signing key
+    /// and returns it together with the key it advertises.
+    ///
+    /// Mirrors Mastodon's `FetchRemoteKeyService`: a document is trusted only
+    /// when the resource its `id` names is the one that was fetched, or when a
+    /// second fetch of that id yields a document whose own key verifies the
+    /// request. The signature is re-verified against the authoritative key
+    /// rather than comparing PEM strings, so two serializations of the same
+    /// key (line endings, PKCS#1 versus SPKI) are not mistaken for different
+    /// keys.
+    ///
+    /// - A standalone Key document is followed to its `owner`, which must
+    ///   identify itself and advertise a key that verifies the request.
+    /// - An actor document whose `id` matches the fetched URL is trusted as is.
+    /// - An actor document claiming a different `id` (a redirect, a canonical
+    ///   URL that differs from the keyID, or a spoofing attempt) is re-fetched
+    ///   from that id. A spoofed id fails here because its real origin does
+    ///   not serve the attacker's key.
+    private func confirmAuthority(
+        of fetched: RemoteActor,
+        fetchedFrom url: String,
+        components: SignatureComponents,
+        request: Request
+    ) async throws -> (actor: RemoteActor, publicKeyPEM: String) {
+        if fetched.isKeyDocument, let owner = fetched.owner {
+            let ownerDocument = try await fetchDocument(at: owner, request: request, keyID: fetched.id)
+            guard ActorIdentity.matches(ownerDocument.id, owner),
+                let ownerPEM = ownerDocument.publicKey?.publicKeyPem
+            else {
+                request.logger.warning(
+                    "Signature verification failed: key document \(fetched.id) names owner \(owner) which does not identify itself or has no key"
+                )
+                throw Self.genericFailure
+            }
+            try verifySignature(request: request, components: components, publicKeyPEM: ownerPEM, keyID: owner)
+            return (ownerDocument, ownerPEM)
+        }
+
+        if ActorIdentity.matches(fetched.id, url), let fetchedPEM = fetched.publicKey?.publicKeyPem {
+            return (fetched, fetchedPEM)
+        }
+
+        let canonical = try await fetchDocument(at: fetched.id, request: request, keyID: fetched.id)
+        guard ActorIdentity.matches(canonical.id, fetched.id),
+            let canonicalPEM = canonical.publicKey?.publicKeyPem
+        else {
+            request.logger.warning(
+                "Signature verification failed: document at \(url) claims id \(fetched.id) but that id does not identify itself or has no key"
+            )
+            throw Self.genericFailure
+        }
+        try verifySignature(request: request, components: components, publicKeyPEM: canonicalPEM, keyID: fetched.id)
+        return (canonical, canonicalPEM)
+    }
 
     /// Resolves the actor URL from a key ID.
     ///
-    /// Handles fragment-based (`actor#main-key`) and path-based
-    /// (`actor/publickey`) key ID formats.
-    private func resolveActorURL(from keyID: String) -> String {
-        // Fragment-based (Mastodon/Misskey: actor#main-key).
+    /// Handles fragment-based (`actor#main-key`; Mastodon, Akkoma, Friendica)
+    /// and path-based (`actor/publickey`; Misskey, `actor/main-key`;
+    /// GoToSocial) key ID formats. A key ID with neither shape (for example
+    /// Hubzilla, whose key id is the actor id itself) is returned unchanged.
+    static func resolveActorURL(from keyID: String) -> String {
+        // Fragment-based.
         if let hashIndex = keyID.firstIndex(of: "#") {
             return String(keyID.prefix(upTo: hashIndex))
         }
 
-        // Path-based (Pleroma: actor/publickey, actor/main-key).
+        // Path-based.
         let knownSuffixes = ["/publickey", "/main-key"]
         let lowered = keyID.lowercased()
         for suffix in knownSuffixes {
@@ -175,7 +270,6 @@ struct HTTPSignatureVerificationMiddleware: AsyncMiddleware {
 
         return keyID
     }
-
 }
 
 /// Verified actor information stored in request storage after signature verification.
