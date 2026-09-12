@@ -41,6 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Subscriber writes are now atomic Lua scripts in Redis: the subscriber hash and its state/all index sets can no longer disagree when two replicas (or a Follow and an admin action) write the same domain concurrently, and delete cleans up every state set
 - A Follow or admin accept/reject racing an admin block can no longer reinstate the blocked domain; the repository refuses the write atomically (inbox responds 403 and releases the dedup slot, admin API responds 409)
 - Signing key bootstrap now uses `HSETNX`, so replicas booting simultaneously against an empty store all adopt the same key pair instead of the last writer overwriting the others
+- The periodic instance info check now runs on only one replica per tick (Redis tick claim) and skips domains whose previous fetch is still pending; a queued fetch that a later tick has already re-dispatched is dropped instead of run, so multiple replicas, a slow instance, or a backlog no longer multiply outbound NodeInfo requests
+- Instance info failure counts are now incremented atomically in Redis, so concurrent failures for the same domain no longer lose a backoff step
+- Instance info requests (NodeInfo discovery, NodeInfo document, homepage favicon) now time out after 30 seconds each, so a remote server that accepts the connection and then stalls no longer holds a queue worker indefinitely
 - Blocked and restricted-mode domains are now rejected before an activity reserves a deduplication slot, so once such a domain is unblocked or allowlisted it can re-deliver the same activity id instead of having it silently absorbed as a duplicate until the TTL expires
 - Building from a checkout whose path contains spaces no longer fails in the version generator plugin
 

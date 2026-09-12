@@ -76,7 +76,7 @@ struct RedisRelayRepository: RelayRepository, Sendable {
     func saveSubscriber(_ subscriber: Subscriber) async throws -> Bool {
         let now = formatDate(Date())
         let otherStates = SubscriberState.allCases.filter { $0 != subscriber.state }
-        let result = try await eval(
+        let result = try await redis.evaluate(
             Self.saveSubscriberScript,
             keys: [
                 subscriberKey(subscriber.domain),
@@ -100,7 +100,7 @@ struct RedisRelayRepository: RelayRepository, Sendable {
     }
 
     func deleteSubscriber(domain: String) async throws {
-        _ = try await eval(
+        _ = try await redis.evaluate(
             Self.deleteSubscriberScript,
             keys: [subscriberKey(domain), allSubscribersKey]
                 + SubscriberState.allCases.map { stateSetKey($0) },
@@ -215,17 +215,6 @@ struct RedisRelayRepository: RelayRepository, Sendable {
             redis.call('SREM', KEYS[i], ARGV[1])
         end
         """
-
-    private func eval(
-        _ script: String,
-        keys: [RedisKey],
-        arguments: [String]
-    ) async throws -> RESPValue {
-        var command: [RESPValue] = [.init(from: script), .init(from: keys.count)]
-        command += keys.map { RESPValue(from: $0) }
-        command += arguments.map { RESPValue(from: $0) }
-        return try await redis.send(command: "EVAL", with: command).get()
-    }
 
     // MARK: - Decoding Helpers
 
