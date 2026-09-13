@@ -40,9 +40,9 @@ struct InstanceInfoJobsTests {
     @Test("Tick dispatches one claimed fetch per accepted subscriber")
     func tickDispatchesPerAcceptedSubscriber() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Self.makeSubscriber("a.example"))
-            try await app.repository.saveSubscriber(Self.makeSubscriber("b.example"))
-            try await app.repository.saveSubscriber(Self.makeSubscriber("pending.example", state: .pending))
+            try await app.repository.seedSubscriber(Self.makeSubscriber("a.example"))
+            try await app.repository.seedSubscriber(Self.makeSubscriber("b.example"))
+            try await app.repository.seedSubscriber(Self.makeSubscriber("pending.example", state: .pending))
             let cache = try Self.mockCache(app)
 
             try await InstanceInfoCheckJob().run(context: Self.makeContext(app))
@@ -62,7 +62,7 @@ struct InstanceInfoJobsTests {
     @Test("Tick is skipped while another replica holds the tick claim")
     func tickSkippedWhileHeld() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Self.makeSubscriber("a.example"))
+            try await app.repository.seedSubscriber(Self.makeSubscriber("a.example"))
             let cache = try Self.mockCache(app)
             // Another replica ran this tick first.
             #expect(try await cache.acquireCheckTick(ttlSeconds: 60))
@@ -76,8 +76,8 @@ struct InstanceInfoJobsTests {
     @Test("Domain with a pending fetch is not dispatched again until the job releases it")
     func pendingFetchNotRedispatched() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Self.makeSubscriber("a.example"))
-            try await app.repository.saveSubscriber(Self.makeSubscriber("b.example"))
+            try await app.repository.seedSubscriber(Self.makeSubscriber("a.example"))
+            try await app.repository.seedSubscriber(Self.makeSubscriber("b.example"))
             let cache = try Self.mockCache(app)
             let context = Self.makeContext(app)
 
@@ -106,7 +106,7 @@ struct InstanceInfoJobsTests {
     @Test("A queued claim whose job is still in the queue is renewed each tick")
     func queuedJobClaimIsRenewed() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Self.makeSubscriber("a.example"))
+            try await app.repository.seedSubscriber(Self.makeSubscriber("a.example"))
             let cache = try Self.mockCache(app)
             let context = Self.makeContext(app)
 
@@ -127,7 +127,7 @@ struct InstanceInfoJobsTests {
     @Test("A claim whose job cannot be found is neither renewed nor replaced")
     func claimWithoutJobIsLeftToExpire() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Self.makeSubscriber("a.example"))
+            try await app.repository.seedSubscriber(Self.makeSubscriber("a.example"))
             let cache = try Self.mockCache(app)
             // A claim left behind by a job that finished without releasing it.
             #expect(try await cache.claimFetch(domain: "a.example", token: "ghost-job", ttlSeconds: 600))
@@ -146,7 +146,7 @@ struct InstanceInfoJobsTests {
     @Test("A queued claim whose job has waited longer than a day is no longer renewed")
     func orphanedQueuedClaimIsNotRenewed() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Self.makeSubscriber("a.example"))
+            try await app.repository.seedSubscriber(Self.makeSubscriber("a.example"))
             let cache = try Self.mockCache(app)
             // Job data left behind by a worker that popped the job and died
             // before taking its running lease, more than a day ago.
@@ -174,7 +174,7 @@ struct InstanceInfoJobsTests {
     @Test("A running claim is left to its own lease and not renewed by the tick")
     func runningClaimIsNotRenewed() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Self.makeSubscriber("a.example"))
+            try await app.repository.seedSubscriber(Self.makeSubscriber("a.example"))
             let cache = try Self.mockCache(app)
             let context = Self.makeContext(app)
 
@@ -203,7 +203,7 @@ struct InstanceInfoJobsTests {
     @Test("Domain inside its backoff window is skipped without taking a claim")
     func backoffWindowSkipped() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Self.makeSubscriber("down.example"))
+            try await app.repository.seedSubscriber(Self.makeSubscriber("down.example"))
             let cache = try Self.mockCache(app)
             try await cache.setInstanceInfo(
                 domain: "down.example",

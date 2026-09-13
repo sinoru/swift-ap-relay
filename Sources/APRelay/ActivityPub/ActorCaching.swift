@@ -86,20 +86,6 @@ enum RefetchState: String, Sendable {
     case settled
 }
 
-extension ActorCaching {
-    /// The verified actor a key id URL resolves to: the actor stored under
-    /// the URL itself, or the one its alias points at.
-    func lookup(url: String) async throws -> VerifiedActor? {
-        if let direct = try await actor(id: url) {
-            return direct
-        }
-        guard let id = try await canonicalID(forURL: url) else {
-            return nil
-        }
-        return try await actor(id: id)
-    }
-}
-
 /// Lifetimes for the actor cache and the fetch path in front of it.
 struct ActorCachePolicy: Sendable {
     /// How long a verified actor stays cached. Key rotation is handled by the

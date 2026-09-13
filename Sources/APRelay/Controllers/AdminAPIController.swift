@@ -26,109 +26,142 @@ struct AdminAPIController: RouteCollection {
     private func acceptSubscriber(req: Request) async throws -> AdminResponse {
         let domain = req.parameters.get("domain")!
 
-        guard var subscriber = try await req.repository.getSubscriber(domain: domain) else {
-            throw Abort(.notFound, reason: "Subscriber not found")
-        }
+        return try await withSubscriberLock(domain: domain, req: req) { lease in
+            guard var subscriber = try await req.repository.getSubscriber(domain: domain) else {
+                throw Abort(.notFound, reason: "Subscriber not found")
+            }
 
-        guard subscriber.state != .accepted else {
-            return AdminResponse(status: "accepted", domain: domain)
-        }
+            guard subscriber.state != .accepted else {
+                return AdminResponse(status: "accepted", domain: domain)
+            }
 
-        subscriber.state = .accepted
+            subscriber.state = .accepted
 
-        // LitePub: if following relay actor directly, prepare outbound follow before saving.
-        if subscriber.followObjectURI == req.relayConfig.actorURL {
-            subscriber.outboundFollowActivityID = "\(req.relayConfig.baseURL)/activities/\(UUID().uuidString)"
-        }
+            // LitePub: if following relay actor directly, prepare outbound follow before saving.
+            if subscriber.followObjectURI == req.relayConfig.actorURL {
+                subscriber.outboundFollowActivityID = "\(req.relayConfig.baseURL)/activities/\(UUID().uuidString)"
+            }
 
-        guard try await req.repository.saveSubscriber(subscriber) else {
-            throw Abort(.conflict, reason: "Domain is blocked")
-        }
+            guard try await req.repository.saveSubscriber(subscriber, lease: lease) else {
+                throw Abort(.conflict, reason: "Domain is blocked")
+            }
 
-        try await req.queue.dispatch(
-            AcceptJob.self,
-            AcceptPayload(
-                inboxURL: subscriber.inboxURL,
-                followActivityID: subscriber.followActivityID,
-                followerActorID: subscriber.actorID,
-                followObjectURI: subscriber.followObjectURI
-            ),
-            maxRetryCount: 5
-        )
-
-        // LitePub: if instance followed the relay actor directly, follow back.
-        if subscriber.followObjectURI == req.relayConfig.actorURL,
-           let outboundFollowID = subscriber.outboundFollowActivityID
-        {
             try await req.queue.dispatch(
-                FollowJob.self,
-                FollowPayload(
+                AcceptJob.self,
+                AcceptPayload(
                     inboxURL: subscriber.inboxURL,
-                    targetActorID: subscriber.actorID,
-                    followActivityID: outboundFollowID
+                    followActivityID: subscriber.followActivityID,
+                    followerActorID: subscriber.actorID,
+                    followObjectURI: subscriber.followObjectURI
                 ),
                 maxRetryCount: 5
             )
+
+            // LitePub: if instance followed the relay actor directly, follow back.
+            if subscriber.followObjectURI == req.relayConfig.actorURL,
+               let outboundFollowID = subscriber.outboundFollowActivityID
+            {
+                try await req.queue.dispatch(
+                    FollowJob.self,
+                    FollowPayload(
+                        inboxURL: subscriber.inboxURL,
+                        targetActorID: subscriber.actorID,
+                        followActivityID: outboundFollowID
+                    ),
+                    maxRetryCount: 5
+                )
+            }
+
+            try await req.queues(.instanceInfo).dispatch(
+                InstanceInfoFetchJob.self,
+                InstanceInfoFetchPayload(domain: domain),
+                maxRetryCount: 0
+            )
+
+            return AdminResponse(status: "accepted", domain: domain)
         }
-
-        try await req.queues(.instanceInfo).dispatch(
-            InstanceInfoFetchJob.self,
-            InstanceInfoFetchPayload(domain: domain),
-            maxRetryCount: 0
-        )
-
-        return AdminResponse(status: "accepted", domain: domain)
     }
 
     @Sendable
     private func rejectSubscriber(req: Request) async throws -> AdminResponse {
         let domain = req.parameters.get("domain")!
 
-        guard var subscriber = try await req.repository.getSubscriber(domain: domain) else {
-            throw Abort(.notFound, reason: "Subscriber not found")
-        }
+        return try await withSubscriberLock(domain: domain, req: req) { lease in
+            guard var subscriber = try await req.repository.getSubscriber(domain: domain) else {
+                throw Abort(.notFound, reason: "Subscriber not found")
+            }
 
-        guard subscriber.state != .rejected else {
+            guard subscriber.state != .rejected else {
+                return AdminResponse(status: "rejected", domain: domain)
+            }
+
+            subscriber.state = .rejected
+
+            // Announce before storing: once the record says rejected, a retry
+            // returns early and would never resend a notification that failed
+            // to queue. The only write that can still be refused under the lock
+            // is one racing a block, and a Reject sent to a domain being blocked
+            // is harmless.
+            try await req.queue.dispatch(
+                RejectJob.self,
+                RejectPayload(
+                    inboxURL: subscriber.inboxURL,
+                    followActivityID: subscriber.followActivityID,
+                    followerActorID: subscriber.actorID,
+                    followObjectURI: subscriber.followObjectURI
+                ),
+                maxRetryCount: 5
+            )
+
+            // LitePub: if we had an outbound Follow, send Undo Follow.
+            try await subscriber.dispatchUndoFollowIfNeeded(on: req.queue)
+            subscriber.outboundFollowActivityID = nil
+
+            guard try await req.repository.saveSubscriber(subscriber, lease: lease) else {
+                throw Abort(.conflict, reason: "Domain is blocked")
+            }
+
             return AdminResponse(status: "rejected", domain: domain)
         }
-
-        subscriber.state = .rejected
-
-        try await req.queue.dispatch(
-            RejectJob.self,
-            RejectPayload(
-                inboxURL: subscriber.inboxURL,
-                followActivityID: subscriber.followActivityID,
-                followerActorID: subscriber.actorID,
-                followObjectURI: subscriber.followObjectURI
-            ),
-            maxRetryCount: 5
-        )
-
-        // LitePub: if we had an outbound Follow, send Undo Follow.
-        try await subscriber.dispatchUndoFollowIfNeeded(on: req.queue)
-        subscriber.outboundFollowActivityID = nil
-
-        guard try await req.repository.saveSubscriber(subscriber) else {
-            throw Abort(.conflict, reason: "Domain is blocked")
-        }
-
-        return AdminResponse(status: "rejected", domain: domain)
     }
 
     @Sendable
     private func removeSubscriber(req: Request) async throws -> AdminResponse {
         let domain = req.parameters.get("domain")!
 
-        guard let subscriber = try await req.repository.getSubscriber(domain: domain) else {
-            throw Abort(.notFound, reason: "Subscriber not found")
+        return try await withSubscriberLock(domain: domain, req: req) { lease in
+            guard let subscriber = try await req.repository.getSubscriber(domain: domain) else {
+                throw Abort(.notFound, reason: "Subscriber not found")
+            }
+
+            // LitePub: if we had an outbound Follow, send Undo Follow.
+            try await subscriber.dispatchUndoFollowIfNeeded(on: req.queue)
+
+            try await req.repository.deleteSubscriber(domain: domain, lease: lease)
+            return AdminResponse(status: "removed", domain: domain)
         }
+    }
 
-        // LitePub: if we had an outbound Follow, send Undo Follow.
-        try await subscriber.dispatchUndoFollowIfNeeded(on: req.queue)
-
-        try await req.repository.deleteSubscriber(domain: domain)
-        return AdminResponse(status: "removed", domain: domain)
+    /// Runs a change to a subscriber under its lock, so it cannot interleave
+    /// with an inbox Follow/Undo/Reject or another admin change for the same
+    /// domain.
+    ///
+    /// A lock held by another change for the whole wait, or a change
+    /// superseded by a later lock holder's write, answers 409 so the operator
+    /// can retry. A failure
+    /// to take the lock at all surfaces as the underlying error.
+    private func withSubscriberLock<Result>(
+        domain: String,
+        req: Request,
+        _ body: (SubscriberLease) async throws -> Result
+    ) async throws -> Result {
+        do {
+            return try await req.withSubscriberLock(domain: domain, body)
+        } catch SubscriberLockError.timedOut, SubscriberLockError.superseded {
+            throw Abort(.conflict, reason: "Subscriber is being updated by another request")
+        } catch SubscriberLockError.unavailable(_, let underlying) {
+            throw underlying
+        }
     }
 
     // MARK: - Blocked Domains
@@ -142,19 +175,26 @@ struct AdminAPIController: RouteCollection {
     private func blockDomain(req: Request) async throws -> AdminResponse {
         let body = try req.content.decode(BlockRequest.self)
 
-        let added = try await req.repository.blockDomain(body.domain, reason: body.reason)
-        if !added {
-            throw Abort(.conflict, reason: "Domain already blocked")
-        }
+        // Block and remove the subscriber under one lock, so a lock timeout
+        // leaves nothing half done and the request can simply be retried.
+        return try await withSubscriberLock(domain: body.domain, req: req) { lease in
+            let added = try await req.repository.blockDomain(body.domain, reason: body.reason)
 
-        // Also remove subscriber if exists.
-        if let subscriber = try await req.repository.getSubscriber(domain: body.domain) {
-            // LitePub: if we had an outbound Follow, send Undo Follow.
-            try await subscriber.dispatchUndoFollowIfNeeded(on: req.queue)
-            try await req.repository.deleteSubscriber(domain: body.domain)
-        }
+            // Remove the subscriber even when the domain was already blocked,
+            // so a retry finishes the cleanup an interrupted earlier block left
+            // behind; a blocked subscriber would otherwise keep receiving
+            // broadcasts.
+            if let subscriber = try await req.repository.getSubscriber(domain: body.domain) {
+                // LitePub: if we had an outbound Follow, send Undo Follow.
+                try await subscriber.dispatchUndoFollowIfNeeded(on: req.queue)
+                try await req.repository.deleteSubscriber(domain: body.domain, lease: lease)
+            }
 
-        return AdminResponse(status: "blocked", domain: body.domain)
+            guard added else {
+                throw Abort(.conflict, reason: "Domain already blocked")
+            }
+            return AdminResponse(status: "blocked", domain: body.domain)
+        }
     }
 
     @Sendable

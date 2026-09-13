@@ -2,7 +2,30 @@ import Foundation
 @testable import APRelay
 
 /// In-memory implementation of ``RelayRepository`` for testing.
+///
+/// Subscriber writes accept any lease unless the repository is created with
+/// `fenced: true`, in which case, like the Redis scripts, a write is refused
+/// once a lease with a later sequence has written the domain.
 actor MockRelayRepository: RelayRepository {
+    private let isFenced: Bool
+    private var writtenSequences: [String: Int] = [:]
+
+    init(fenced: Bool = false) {
+        self.isFenced = fenced
+    }
+
+    private func checkFence(domain: String, lease: SubscriberLease) throws {
+        guard isFenced else { return }
+        guard lease.sequence >= writtenSequences[domain, default: 0] else {
+            throw SubscriberLockError.superseded(domain: domain)
+        }
+    }
+
+    private func recordWrite(domain: String, lease: SubscriberLease) {
+        guard isFenced else { return }
+        writtenSequences[domain] = lease.sequence
+    }
+
     private var subscribers: [String: Subscriber] = [:]
     private var blockedDomains: Set<String> = []
     private var blockedDomainMeta: [String: (reason: String?, createdAt: Date?)] = [:]
@@ -28,13 +51,17 @@ actor MockRelayRepository: RelayRepository {
             .map(\.inboxURL)
     }
 
-    func saveSubscriber(_ subscriber: Subscriber) async throws -> Bool {
+    func saveSubscriber(_ subscriber: Subscriber, lease: SubscriberLease) async throws -> Bool {
+        try checkFence(domain: subscriber.domain, lease: lease)
         guard !blockedDomains.contains(subscriber.domain) else { return false }
+        recordWrite(domain: subscriber.domain, lease: lease)
         subscribers[subscriber.domain] = subscriber
         return true
     }
 
-    func deleteSubscriber(domain: String) async throws {
+    func deleteSubscriber(domain: String, lease: SubscriberLease) async throws {
+        try checkFence(domain: domain, lease: lease)
+        recordWrite(domain: domain, lease: lease)
         subscribers.removeValue(forKey: domain)
     }
 

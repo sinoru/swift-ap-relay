@@ -51,7 +51,7 @@ struct AdminAPIClientTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let subscribers = try await client.listSubscribers()
             #expect(subscribers.count == 1)
@@ -81,8 +81,8 @@ struct AdminAPIClientTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(accepted)
-            try await app.repository.saveSubscriber(pending)
+            try await app.repository.seedSubscriber(accepted)
+            try await app.repository.seedSubscriber(pending)
 
             let subscribers = try await client.listSubscribers(state: "pending")
             #expect(subscribers.count == 1)
@@ -102,7 +102,7 @@ struct AdminAPIClientTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let response = try await client.acceptSubscriber(domain: "test.example")
             #expect(response.status == "accepted")
@@ -134,7 +134,7 @@ struct AdminAPIClientTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let response = try await client.rejectSubscriber(domain: "test.example")
             #expect(response.status == "rejected")
@@ -178,7 +178,7 @@ struct AdminAPIClientTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let response = try await client.blockDomain("bad.example", reason: "spam")
             #expect(response.status == "blocked")

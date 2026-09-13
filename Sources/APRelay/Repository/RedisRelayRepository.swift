@@ -73,7 +73,7 @@ struct RedisRelayRepository: RelayRepository, Sendable {
         return results.compactMap(\.string)
     }
 
-    func saveSubscriber(_ subscriber: Subscriber) async throws -> Bool {
+    func saveSubscriber(_ subscriber: Subscriber, lease: SubscriberLease) async throws -> Bool {
         let now = formatDate(Date())
         let otherStates = SubscriberState.allCases.filter { $0 != subscriber.state }
         let result = try await redis.evaluate(
@@ -82,10 +82,12 @@ struct RedisRelayRepository: RelayRepository, Sendable {
                 subscriberKey(subscriber.domain),
                 allSubscribersKey,
                 blockedDomainsSetKey,
+                RedisSubscriberLock.fenceKey(subscriber.domain),
                 stateSetKey(subscriber.state),
             ] + otherStates.map { stateSetKey($0) },
             arguments: [
                 subscriber.domain,
+                String(lease.sequence),
                 subscriber.createdAt.map { formatDate($0) } ?? now,
                 now,
                 "inboxURL", subscriber.inboxURL,
@@ -96,16 +98,26 @@ struct RedisRelayRepository: RelayRepository, Sendable {
                 "outboundFollowActivityID", subscriber.outboundFollowActivityID ?? "",
             ]
         )
-        return result.int == 1
+        switch result.int {
+        case 1: return true
+        case 0: return false
+        default: throw SubscriberLockError.superseded(domain: subscriber.domain)
+        }
     }
 
-    func deleteSubscriber(domain: String) async throws {
-        _ = try await redis.evaluate(
+    func deleteSubscriber(domain: String, lease: SubscriberLease) async throws {
+        let result = try await redis.evaluate(
             Self.deleteSubscriberScript,
-            keys: [subscriberKey(domain), allSubscribersKey]
-                + SubscriberState.allCases.map { stateSetKey($0) },
-            arguments: [domain]
+            keys: [
+                subscriberKey(domain),
+                RedisSubscriberLock.fenceKey(domain),
+                allSubscribersKey,
+            ] + SubscriberState.allCases.map { stateSetKey($0) },
+            arguments: [domain, String(lease.sequence)]
         )
+        guard result.int == 1 else {
+            throw SubscriberLockError.superseded(domain: domain)
+        }
     }
 
     // MARK: - Blocked Domains
@@ -184,36 +196,51 @@ struct RedisRelayRepository: RelayRepository, Sendable {
     /// interleave with it and leave the hash and the index sets disagreeing.
     ///
     /// KEYS: [1] subscriber hash, [2] all-subscribers set, [3] blocked-domains
-    /// set, [4] the set for the subscriber's state, [5...] the other state sets.
-    /// ARGV: [1] domain, [2] createdAt to use for a new record, [3] updatedAt,
-    /// [4...] alternating field names and values for the hash.
+    /// set, [4] subscriber fence hash, [5] the set for the subscriber's state,
+    /// [6...] the other state sets.
+    /// ARGV: [1] domain, [2] lease sequence, [3] createdAt to use for a new
+    /// record, [4] updatedAt, [5...] alternating field names and values for
+    /// the hash.
     ///
-    /// Returns 1 when written, 0 when refused because the domain is blocked.
+    /// Returns 1 when written, 0 when refused because the domain is blocked,
+    /// -1 when refused because a holder with a later sequence has written.
     private static let saveSubscriberScript = """
+        if tonumber(ARGV[2]) < (tonumber(redis.call('HGET', KEYS[4], 'written')) or 0) then
+            return -1
+        end
         if redis.call('SISMEMBER', KEYS[3], ARGV[1]) == 1 then
             return 0
         end
-        local createdAt = redis.call('HGET', KEYS[1], 'createdAt') or ARGV[2]
-        redis.call('HSET', KEYS[1], 'createdAt', createdAt, 'updatedAt', ARGV[3], unpack(ARGV, 4))
+        redis.call('HSET', KEYS[4], 'written', ARGV[2])
+        local createdAt = redis.call('HGET', KEYS[1], 'createdAt') or ARGV[3]
+        redis.call('HSET', KEYS[1], 'createdAt', createdAt, 'updatedAt', ARGV[4], unpack(ARGV, 5))
         redis.call('SADD', KEYS[2], ARGV[1])
-        for i = 5, #KEYS do
+        for i = 6, #KEYS do
             redis.call('SREM', KEYS[i], ARGV[1])
         end
-        redis.call('SADD', KEYS[4], ARGV[1])
+        redis.call('SADD', KEYS[5], ARGV[1])
         return 1
         """
 
-    /// KEYS: [1] subscriber hash, [2] all-subscribers set, [3...] every state
-    /// set. ARGV: [1] domain.
+    /// KEYS: [1] subscriber hash, [2] subscriber fence hash, [3] all-subscribers
+    /// set, [4...] every state set. ARGV: [1] domain, [2] lease sequence.
     ///
     /// The domain is removed from every state set rather than only the one
     /// recorded in the hash, so a record left inconsistent by an interrupted
     /// pre-script write is cleaned up as well.
+    ///
+    /// Returns 1 when deleted, -1 when refused because a holder with a later
+    /// sequence has written.
     private static let deleteSubscriberScript = """
+        if tonumber(ARGV[2]) < (tonumber(redis.call('HGET', KEYS[2], 'written')) or 0) then
+            return -1
+        end
+        redis.call('HSET', KEYS[2], 'written', ARGV[2])
         redis.call('DEL', KEYS[1])
-        for i = 2, #KEYS do
+        for i = 3, #KEYS do
             redis.call('SREM', KEYS[i], ARGV[1])
         end
+        return 1
         """
 
     // MARK: - Decoding Helpers

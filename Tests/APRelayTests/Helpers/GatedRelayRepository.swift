@@ -1,30 +1,36 @@
 @testable import APRelay
 
-/// Wraps a ``MockRelayRepository`` so that selected reads report stale state,
-/// simulating a write from another replica that lands between a check and
-/// the write that follows it.
+/// Wraps a ``MockRelayRepository`` and holds the first call of one write
+/// until the test opens the gate, so another request can be made to arrive
+/// while a handler is between its read and its write.
 ///
-/// - `isBlocked` reports `false` for every domain in `staleUnblockedDomains`
-///   regardless of the base state, so a Follow can pass the inbox check while
-///   the repository write still sees the block.
-/// - `getSetting` reports `nil` for the first read of each key in
-///   `staleAbsentSettingKeys`, so a bootstrap can believe a setting is absent
-///   while the conditional write still sees the stored value.
-///
-/// Every other operation is forwarded to the base repository unchanged.
-actor StaleReadRelayRepository: RelayRepository {
-    private let base: MockRelayRepository
-    private let staleUnblockedDomains: Set<String>
-    private var staleAbsentSettingKeys: Set<String>
+/// Every other call, and every later call of the gated write, is forwarded
+/// to the base repository unchanged.
+actor GatedRelayRepository: RelayRepository {
+    enum Write {
+        case saveSubscriber
+        case deleteSubscriber
+    }
 
-    init(
-        base: MockRelayRepository,
-        staleUnblockedDomains: Set<String> = [],
-        staleAbsentSettingKeys: Set<String> = []
-    ) {
+    let gate = FetchGate()
+    private let base: MockRelayRepository
+    private let gatedWrite: Write
+    private var hasGated = false
+
+    /// Whether a call is currently held at the gate.
+    private(set) var isHeldAtGate = false
+
+    init(base: MockRelayRepository, gating gatedWrite: Write) {
         self.base = base
-        self.staleUnblockedDomains = staleUnblockedDomains
-        self.staleAbsentSettingKeys = staleAbsentSettingKeys
+        self.gatedWrite = gatedWrite
+    }
+
+    private func pass(_ write: Write) async {
+        guard write == gatedWrite, !hasGated else { return }
+        hasGated = true
+        isHeldAtGate = true
+        await gate.wait()
+        isHeldAtGate = false
     }
 
     // MARK: - Subscribers
@@ -42,20 +48,19 @@ actor StaleReadRelayRepository: RelayRepository {
     }
 
     func saveSubscriber(_ subscriber: Subscriber, lease: SubscriberLease) async throws -> Bool {
-        try await base.saveSubscriber(subscriber, lease: lease)
+        await pass(.saveSubscriber)
+        return try await base.saveSubscriber(subscriber, lease: lease)
     }
 
     func deleteSubscriber(domain: String, lease: SubscriberLease) async throws {
+        await pass(.deleteSubscriber)
         try await base.deleteSubscriber(domain: domain, lease: lease)
     }
 
     // MARK: - Blocked Domains
 
     func isBlocked(domain: String) async throws -> Bool {
-        if staleUnblockedDomains.contains(domain) {
-            return false
-        }
-        return try await base.isBlocked(domain: domain)
+        try await base.isBlocked(domain: domain)
     }
 
     func getAllBlockedDomains() async throws -> [BlockedDomain] {
@@ -79,10 +84,7 @@ actor StaleReadRelayRepository: RelayRepository {
     // MARK: - Settings
 
     func getSetting(key: String) async throws -> String? {
-        if staleAbsentSettingKeys.remove(key) != nil {
-            return nil
-        }
-        return try await base.getSetting(key: key)
+        try await base.getSetting(key: key)
     }
 
     func setSetting(key: String, value: String) async throws {

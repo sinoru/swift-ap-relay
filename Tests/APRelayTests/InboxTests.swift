@@ -97,7 +97,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeFollowActivity()
             let (headers, body) = try TestSigning.signedRequest(activity: activity)
@@ -127,7 +127,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeFollowActivity()
             let (headers, body) = try TestSigning.signedRequest(activity: activity)
@@ -179,7 +179,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeUndoActivity()
             let (headers, body) = try TestSigning.signedRequest(activity: activity)
@@ -206,7 +206,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeUndoActivity(objectAsURI: true)
             let (headers, body) = try TestSigning.signedRequest(activity: activity)
@@ -233,7 +233,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeUndoActivity()
             let (headers, body) = try TestSigning.signedRequest(activity: activity)
@@ -267,7 +267,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             // The body claims the stored subscriber actor and references
             // the current Follow, but the request is signed by other-actor.
@@ -301,7 +301,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             // A bare-URI Undo whose URI matches the stored Follow, so it is an
             // Undo Follow — but the request is signed by other-actor, so the
@@ -331,7 +331,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeUndoActivity(
                 followID: "https://remote.example/activities/follow-1"
@@ -360,7 +360,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeUndoActivity(
                 followID: "https://remote.example/activities/follow-1",
@@ -390,7 +390,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeUndoActivity(
                 innerActor: "https://remote.example/other-actor"
@@ -419,7 +419,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             // Same domain, different actor; the nested Follow spoofs the
             // subscriber actor and references the current Follow id.
@@ -451,7 +451,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeUndoActivity(
                 actor: "https://remote.example/other-actor",
@@ -481,7 +481,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let json = TestSigning.makeUndoJSONWithBareFollowObject()
             let (headers, body) = try TestSigning.signedRequest(json: json)
@@ -508,7 +508,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let json = TestSigning.makeUndoJSONWithBareFollowObject(
                 followID: "https://remote.example/activities/follow-1"
@@ -539,7 +539,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeCreateActivity()
             let (headers, body) = try TestSigning.signedRequest(activity: activity)
@@ -578,7 +578,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeDeleteActivity()
             let (headers, body) = try TestSigning.signedRequest(activity: activity)
@@ -604,7 +604,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeMoveActivity()
             let (headers, body) = try TestSigning.signedRequest(activity: activity)
@@ -643,7 +643,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeAddActivity()
             let (headers, body) = try TestSigning.signedRequest(activity: activity)
@@ -667,7 +667,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeRemoveActivity()
             let (headers, body) = try TestSigning.signedRequest(activity: activity)
@@ -693,7 +693,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeUndoAnnounceActivity()
             let (headers, body) = try TestSigning.signedRequest(activity: activity)
@@ -721,7 +721,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sender)
+            try await app.repository.seedSubscriber(sender)
 
             let other = Subscriber(
                 domain: "other.example",
@@ -732,7 +732,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(other)
+            try await app.repository.seedSubscriber(other)
 
             // A URI-only Undo whose object is some other activity (e.g. an
             // un-boost), not the stored Follow. It must be relayed via the
@@ -798,7 +798,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeAcceptActivity(
                 followActivityID: outboundFollowID,
@@ -834,7 +834,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeAcceptActivity(
                 followActivityID: "http://localhost/activities/unknown",
@@ -872,7 +872,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeRejectActivity(
                 followActivityID: outboundFollowID,
@@ -905,7 +905,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeRejectActivity(
                 followActivityID: "http://localhost/activities/unknown",
@@ -948,7 +948,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeRejectActivity(
                 followActivityID: outboundFollowID,
@@ -982,7 +982,7 @@ struct InboxTests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             let activity = TestSigning.makeUndoActivity()
             let (headers, body) = try TestSigning.signedRequest(activity: activity)

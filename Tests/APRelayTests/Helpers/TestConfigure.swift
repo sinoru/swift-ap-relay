@@ -4,12 +4,13 @@ import XCTQueues
 @testable import APRelay
 
 /// Configures the app for testing with mock repository, deduplicator, instance info cache,
-/// actor cache, and actor fetcher.
+/// actor cache, subscriber lock, and actor fetcher.
 func testConfigure(_ app: Application) async throws {
     app.repositoryOverride = MockRelayRepository()
     app.deduplicatorOverride = MockActivityDeduplicator()
     app.instanceInfoCacheOverride = MockInstanceInfoCache()
     app.actorCacheOverride = MockActorCache()
+    app.subscriberLockOverride = MockSubscriberLock()
     app.queues.use(.asyncTest)
     try await APRelay.configure(app)
     app.relayConfig = RelayConfiguration(
@@ -25,6 +26,7 @@ func testConfigureManualAccept(_ app: Application) async throws {
     app.deduplicatorOverride = MockActivityDeduplicator()
     app.instanceInfoCacheOverride = MockInstanceInfoCache()
     app.actorCacheOverride = MockActorCache()
+    app.subscriberLockOverride = MockSubscriberLock()
     app.queues.use(.asyncTest)
     try await APRelay.configure(app)
     app.relayConfig = RelayConfiguration(
@@ -41,6 +43,7 @@ func testConfigureRestricted(_ app: Application) async throws {
     app.deduplicatorOverride = MockActivityDeduplicator()
     app.instanceInfoCacheOverride = MockInstanceInfoCache()
     app.actorCacheOverride = MockActorCache()
+    app.subscriberLockOverride = MockSubscriberLock()
     app.queues.use(.asyncTest)
     try await APRelay.configure(app)
     app.relayConfig = RelayConfiguration(

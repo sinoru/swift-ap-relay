@@ -82,11 +82,9 @@ struct RedisActorCache: ActorCaching, Sendable {
     }
 
     func releaseFetchLock(url: String, token: String) async throws {
-        _ = try await redis.evaluate(
-            Self.releaseFetchLockScript,
-            keys: [fetchLockKey(url)],
-            arguments: [token]
-        )
+        // Only while still held under this token, so a holder that outlived
+        // its claim does not release the next holder's.
+        try await redis.delete(fetchLockKey(url), ifEqualTo: token)
     }
 
     func acquireRefetch(id: String, holdSeconds: Int) async throws -> Bool {
@@ -106,11 +104,9 @@ struct RedisActorCache: ActorCaching, Sendable {
     }
 
     func releaseRefetch(id: String) async throws {
-        _ = try await redis.evaluate(
-            Self.releaseRefetchScript,
-            keys: [refetchKey(id)],
-            arguments: [RefetchState.refreshing.rawValue]
-        )
+        // Only while it is still the claim of a refresh in progress, so a hold
+        // settled by a fetch in the meantime is kept.
+        try await redis.delete(refetchKey(id), ifEqualTo: RefetchState.refreshing.rawValue)
     }
 
     func refetchState(id: String) async throws -> RefetchState? {
@@ -122,26 +118,6 @@ struct RedisActorCache: ActorCaching, Sendable {
         }
         return state
     }
-
-    /// KEYS: [1] re-fetch hold. ARGV: [1] the refreshing state. Deletes the
-    /// hold only while it is still the claim of a refresh in progress, so a
-    /// hold settled by a fetch in the meantime is kept.
-    private static let releaseRefetchScript = """
-        if redis.call('GET', KEYS[1]) == ARGV[1] then
-            return redis.call('DEL', KEYS[1])
-        end
-        return 0
-        """
-
-    /// KEYS: [1] fetch claim. ARGV: [1] token. Deletes the claim only while it
-    /// is still held under this token, so a holder that outlived its claim
-    /// does not release the next holder's.
-    private static let releaseFetchLockScript = """
-        if redis.call('GET', KEYS[1]) == ARGV[1] then
-            return redis.call('DEL', KEYS[1])
-        end
-        return 0
-        """
 }
 
 enum ActorCacheError: Error {

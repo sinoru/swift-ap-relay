@@ -82,7 +82,7 @@ struct HTMLSnapshotTests {
                 relayDescription: LocalizedString(["und": "<p>A federated relay for the fediverse.</p>"])
             )
         }) { app in
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "mastodon.social",
                 inboxURL: "https://mastodon.social/inbox",
                 actorID: "https://mastodon.social/actor",
@@ -90,7 +90,7 @@ struct HTMLSnapshotTests {
                 followActivityID: "https://mastodon.social/activity/1",
                 createdAt: Self.fixedDate
             ))
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "misskey.io",
                 inboxURL: "https://misskey.io/inbox",
                 actorID: "https://misskey.io/actor",
@@ -98,7 +98,7 @@ struct HTMLSnapshotTests {
                 followActivityID: "https://misskey.io/activity/1",
                 createdAt: Self.fixedDate
             ))
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "pleroma.example.com",
                 inboxURL: "https://pleroma.example.com/inbox",
                 actorID: "https://pleroma.example.com/actor",

@@ -144,7 +144,7 @@ struct HTMLRenderTests {
     @Test("Subscribers present renders instance grid with domains")
     func subscribersPresent() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "mastodon.example.com",
                 inboxURL: "https://mastodon.example.com/inbox",
                 actorID: "https://mastodon.example.com/actor",
@@ -167,7 +167,7 @@ struct HTMLRenderTests {
     @Test("Subscriber with instance info renders software name and version")
     func subscriberWithSoftwareInfo() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "info.example.com",
                 inboxURL: "https://info.example.com/inbox",
                 actorID: "https://info.example.com/actor",
@@ -197,7 +197,7 @@ struct HTMLRenderTests {
     @Test("Reachable subscriber shows online status dot")
     func reachableStatusDot() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "online.example.com",
                 inboxURL: "https://online.example.com/inbox",
                 actorID: "https://online.example.com/actor",
@@ -221,7 +221,7 @@ struct HTMLRenderTests {
     @Test("Unreachable subscriber shows down status dot")
     func unreachableStatusDot() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "down.example.com",
                 inboxURL: "https://down.example.com/inbox",
                 actorID: "https://down.example.com/actor",
@@ -245,7 +245,7 @@ struct HTMLRenderTests {
     @Test("Subscriber without instance info shows unknown status dot")
     func uncheckedStatusDot() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "unchecked.example.com",
                 inboxURL: "https://unchecked.example.com/inbox",
                 actorID: "https://unchecked.example.com/actor",
@@ -264,7 +264,7 @@ struct HTMLRenderTests {
     @Test("Open registrations badge is rendered")
     func openRegistrationsBadge() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "openreg.example.com",
                 inboxURL: "https://openreg.example.com/inbox",
                 actorID: "https://openreg.example.com/actor",
@@ -290,7 +290,7 @@ struct HTMLRenderTests {
     @Test("Closed registrations badge is rendered")
     func closedRegistrationsBadge() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "closedreg.example.com",
                 inboxURL: "https://closedreg.example.com/inbox",
                 actorID: "https://closedreg.example.com/actor",
@@ -316,7 +316,7 @@ struct HTMLRenderTests {
     @Test("Staff accounts are rendered as links")
     func staffAccountsRendered() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "staff.example.com",
                 inboxURL: "https://staff.example.com/inbox",
                 actorID: "https://staff.example.com/actor",
@@ -344,7 +344,7 @@ struct HTMLRenderTests {
     @Test("Subscriber count is displayed")
     func subscriberCountDisplayed() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "one.example.com",
                 inboxURL: "https://one.example.com/inbox",
                 actorID: "https://one.example.com/actor",
@@ -352,7 +352,7 @@ struct HTMLRenderTests {
                 followActivityID: "https://one.example.com/activity/1",
                 createdAt: Date()
             ))
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "two.example.com",
                 inboxURL: "https://two.example.com/inbox",
                 actorID: "https://two.example.com/actor",
@@ -372,7 +372,7 @@ struct HTMLRenderTests {
     @Test("Favicon URL uses instance info when available")
     func faviconFromInstanceInfo() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "favicon.example.com",
                 inboxURL: "https://favicon.example.com/inbox",
                 actorID: "https://favicon.example.com/actor",
@@ -402,7 +402,7 @@ struct HTMLRenderTests {
     @Test("Software name without version renders name only")
     func softwareNameWithoutVersion() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "nover.example.com",
                 inboxURL: "https://nover.example.com/inbox",
                 actorID: "https://nover.example.com/actor",
@@ -434,7 +434,7 @@ struct HTMLRenderTests {
     @Test("Subscriber without instance info has no instance-meta or instance-staff")
     func subscriberWithoutInstanceInfoHasNoMeta() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "bare.example.com",
                 inboxURL: "https://bare.example.com/inbox",
                 actorID: "https://bare.example.com/actor",
@@ -458,7 +458,7 @@ struct HTMLRenderTests {
     @Test("Subscriber with createdAt renders joined date")
     func joinedAtPresent() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "joined.example.com",
                 inboxURL: "https://joined.example.com/inbox",
                 actorID: "https://joined.example.com/actor",
@@ -477,7 +477,7 @@ struct HTMLRenderTests {
     @Test("Subscriber without createdAt does not render joined date")
     func joinedAtAbsent() async throws {
         try await withApp(configure: testConfigure) { app in
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "nodate.example.com",
                 inboxURL: "https://nodate.example.com/inbox",
                 actorID: "https://nodate.example.com/actor",

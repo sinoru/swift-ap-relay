@@ -71,7 +71,7 @@ struct ActorAuthorityTests {
                 state: .accepted,
                 followActivityID: "https://victim.example/activities/follow-1"
             )
-            try await app.repository.saveSubscriber(existing)
+            try await app.repository.seedSubscriber(existing)
 
             let activity = TestSigning.makeFollowActivity(actor: Self.victimActorID)
             let (headers, body) = try signedRequest(
@@ -107,7 +107,7 @@ struct ActorAuthorityTests {
 
         try await withApp(configure: configure(fetcher: fetcher)) { app in
             let followID = "https://victim.example/activities/follow-1"
-            try await app.repository.saveSubscriber(Subscriber(
+            try await app.repository.seedSubscriber(Subscriber(
                 domain: "victim.example",
                 inboxURL: "https://victim.example/inbox",
                 actorID: Self.victimActorID,

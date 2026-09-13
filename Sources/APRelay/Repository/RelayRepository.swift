@@ -13,15 +13,24 @@ protocol RelayRepository: Sendable {
     ///
     /// The write is refused as a whole when the subscriber's domain is
     /// blocked at the moment of the write, so a Follow racing an admin block
-    /// cannot resurrect a subscriber the block just removed.
+    /// cannot resurrect a subscriber the block just removed. It is also
+    /// fenced against `lease`: once a later holder of the domain's subscriber
+    /// lock has written, nothing is written under an earlier lease.
     ///
     /// - Returns: `true` if the record was written, `false` if the domain is
     ///   blocked and nothing was written.
+    /// - Throws: ``SubscriberLockError/superseded(domain:)`` when a later
+    ///   lock holder has already written.
     @discardableResult
-    func saveSubscriber(_ subscriber: Subscriber) async throws -> Bool
+    func saveSubscriber(_ subscriber: Subscriber, lease: SubscriberLease) async throws -> Bool
 
     /// Removes a subscriber record atomically, including every index entry.
-    func deleteSubscriber(domain: String) async throws
+    ///
+    /// Fenced against `lease` like ``saveSubscriber(_:lease:)``.
+    ///
+    /// - Throws: ``SubscriberLockError/superseded(domain:)`` when a later
+    ///   lock holder has already written.
+    func deleteSubscriber(domain: String, lease: SubscriberLease) async throws
 
     // MARK: - Blocked Domains
 

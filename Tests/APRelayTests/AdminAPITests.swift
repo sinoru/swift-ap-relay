@@ -40,7 +40,7 @@ struct AdminAPITests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             try await app.testing().test(
                 .GET,
@@ -74,8 +74,8 @@ struct AdminAPITests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(accepted)
-            try await app.repository.saveSubscriber(pending)
+            try await app.repository.seedSubscriber(accepted)
+            try await app.repository.seedSubscriber(pending)
 
             try await app.testing().test(
                 .GET,
@@ -102,7 +102,7 @@ struct AdminAPITests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             try await app.testing().test(
                 .POST,
@@ -130,7 +130,7 @@ struct AdminAPITests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
             // A block that has not yet removed the record: the accept's
             // write must not reinstate it.
             _ = try await app.repository.blockDomain("test.example", reason: nil)
@@ -161,7 +161,7 @@ struct AdminAPITests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             try await app.testing().test(
                 .POST,
@@ -189,7 +189,7 @@ struct AdminAPITests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             try await app.testing().test(
                 .DELETE,
@@ -248,7 +248,7 @@ struct AdminAPITests {
                 createdAt: Date(),
                 updatedAt: Date()
             )
-            try await app.repository.saveSubscriber(sub)
+            try await app.repository.seedSubscriber(sub)
 
             var blockHeaders = authHeaders
             blockHeaders.contentType = .json
@@ -287,6 +287,41 @@ struct AdminAPITests {
             ) { res async in
                 #expect(res.status == .conflict)
             }
+        }
+    }
+
+    @Test("POST block of an already-blocked domain still removes a leftover subscriber")
+    func blockAlreadyBlockedRemovesLeftoverSubscriber() async throws {
+        try await withApp(configure: testConfigure) { app in
+            let sub = Subscriber(
+                domain: "bad.example",
+                inboxURL: "https://bad.example/inbox",
+                actorID: "https://bad.example/actor",
+                state: .accepted,
+                followActivityID: "https://bad.example/follow/1",
+                outboundFollowActivityID: "http://localhost/activities/outbound-1",
+                createdAt: Date(),
+                updatedAt: Date()
+            )
+            try await app.repository.seedSubscriber(sub)
+            // An earlier block stored the block but stopped before removing
+            // the subscriber.
+            _ = try await app.repository.blockDomain("bad.example", reason: nil)
+
+            var blockHeaders = authHeaders
+            blockHeaders.contentType = .json
+
+            try await app.testing().test(
+                .POST,
+                "api/admin/blocked-domains",
+                headers: blockHeaders,
+                body: ByteBuffer(string: "{\"domain\":\"bad.example\"}")
+            ) { res async in
+                #expect(res.status == .conflict)
+            }
+
+            #expect(try await app.repository.getSubscriber(domain: "bad.example") == nil)
+            #expect(app.queues.asyncTest.all(UndoFollowJob.self).count == 1)
         }
     }
 

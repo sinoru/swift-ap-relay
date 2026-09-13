@@ -43,6 +43,8 @@ struct RedisRelayRepositoryTests {
     private static func cleanUp(_ connection: RedisConnection) async throws {
         for domain in [domain, otherDomain] {
             _ = try await connection.delete("subscriber:\(domain)").get()
+            _ = try await connection.delete(RedisSubscriberLock.lockKey(domain)).get()
+            _ = try await connection.delete(RedisSubscriberLock.fenceKey(domain)).get()
             _ = try await connection.srem(domain, from: "subscribers:all").get()
             _ = try await connection.srem(domain, from: "blocked_domains").get()
             for state in SubscriberState.allCases {
@@ -69,6 +71,17 @@ struct RedisRelayRepositoryTests {
         )
     }
 
+    /// Takes the subscriber lock on `domain`, as a handler would before writing.
+    private static func lease(
+        _ domain: String = domain,
+        on connection: RedisConnection
+    ) async throws -> SubscriberLease {
+        let token = UUID().uuidString
+        let sequence = try await RedisSubscriberLock(redis: connection)
+            .acquire(domain: domain, token: token, ttlSeconds: 60)
+        return SubscriberLease(domain: domain, token: token, sequence: try #require(sequence))
+    }
+
     private static func isMember(
         _ domain: String,
         of key: RedisKey,
@@ -81,8 +94,10 @@ struct RedisRelayRepositoryTests {
     func saveAndMoveState() async throws {
         try await Self.withRepository { repository, connection in
             let created = Date(timeIntervalSince1970: 1_700_000_000)
+            let lease = try await Self.lease(on: connection)
             let saved = try await repository.saveSubscriber(
-                Self.makeSubscriber(state: .pending, createdAt: created)
+                Self.makeSubscriber(state: .pending, createdAt: created),
+                lease: lease
             )
             #expect(saved)
 
@@ -96,7 +111,8 @@ struct RedisRelayRepositoryTests {
 
             // Re-saving with another state moves the index entry and keeps createdAt.
             let resaved = try await repository.saveSubscriber(
-                Self.makeSubscriber(state: .accepted, createdAt: Date())
+                Self.makeSubscriber(state: .accepted, createdAt: Date()),
+                lease: lease
             )
             #expect(resaved)
 
@@ -116,8 +132,11 @@ struct RedisRelayRepositoryTests {
     func saveRefusedWhenBlocked() async throws {
         try await Self.withRepository { repository, connection in
             _ = try await connection.sadd(Self.domain, to: "blocked_domains").get()
+            let lease = try await Self.lease(on: connection)
 
-            let saved = try await repository.saveSubscriber(Self.makeSubscriber(state: .accepted))
+            let saved = try await repository.saveSubscriber(
+                Self.makeSubscriber(state: .accepted), lease: lease
+            )
             #expect(!saved)
 
             let stored = try await repository.getSubscriber(domain: Self.domain)
@@ -132,12 +151,15 @@ struct RedisRelayRepositoryTests {
     @Test("Delete removes the hash and every index entry, including stale ones")
     func deleteRemovesEverything() async throws {
         try await Self.withRepository { repository, connection in
-            let saved = try await repository.saveSubscriber(Self.makeSubscriber(state: .accepted))
+            let lease = try await Self.lease(on: connection)
+            let saved = try await repository.saveSubscriber(
+                Self.makeSubscriber(state: .accepted), lease: lease
+            )
             #expect(saved)
             // A stale entry left by an interrupted write is cleaned up too.
             _ = try await connection.sadd(Self.domain, to: "subscribers:state:rejected").get()
 
-            try await repository.deleteSubscriber(domain: Self.domain)
+            try await repository.deleteSubscriber(domain: Self.domain, lease: lease)
 
             let stored = try await repository.getSubscriber(domain: Self.domain)
             #expect(stored == nil)
@@ -154,9 +176,83 @@ struct RedisRelayRepositoryTests {
 
     @Test("Delete of an unknown domain is a no-op")
     func deleteUnknownDomain() async throws {
-        try await Self.withRepository { repository, _ in
-            try await repository.deleteSubscriber(domain: Self.otherDomain)
+        try await Self.withRepository { repository, connection in
+            let lease = try await Self.lease(Self.otherDomain, on: connection)
+            try await repository.deleteSubscriber(domain: Self.otherDomain, lease: lease)
             let stored = try await repository.getSubscriber(domain: Self.otherDomain)
+            #expect(stored == nil)
+        }
+    }
+
+    /// Lets the lock on the test domain lapse, as if its holder outlived its TTL.
+    private static func expireLock(on connection: RedisConnection) async throws {
+        _ = try await connection.delete(RedisSubscriberLock.lockKey(domain)).get()
+    }
+
+    @Test("A holder whose lock expired still writes when no later holder has written")
+    func expiredLeaseWithoutLaterWriteCommits() async throws {
+        try await Self.withRepository { repository, connection in
+            let stale = try await Self.lease(on: connection)
+            try await Self.expireLock(on: connection)
+            // A later holder that takes the lock but has not written does not
+            // fence the earlier one.
+            let later = try await Self.lease(on: connection)
+            #expect(later.sequence > stale.sequence)
+
+            let saved = try await repository.saveSubscriber(
+                Self.makeSubscriber(state: .pending), lease: stale
+            )
+            #expect(saved)
+            let laterSaved = try await repository.saveSubscriber(
+                Self.makeSubscriber(state: .accepted), lease: later
+            )
+            #expect(laterSaved)
+
+            let stored = try await repository.getSubscriber(domain: Self.domain)
+            #expect(stored?.state == .accepted)
+        }
+    }
+
+    @Test("A holder overtaken by a later holder's write can neither save nor delete")
+    func supersededLeaseRefused() async throws {
+        try await Self.withRepository { repository, connection in
+            let stale = try await Self.lease(on: connection)
+            let saved = try await repository.saveSubscriber(
+                Self.makeSubscriber(state: .pending), lease: stale
+            )
+            #expect(saved)
+
+            try await Self.expireLock(on: connection)
+            let later = try await Self.lease(on: connection)
+            let written = try await repository.saveSubscriber(
+                Self.makeSubscriber(state: .accepted), lease: later
+            )
+            #expect(written)
+
+            await #expect(throws: SubscriberLockError.self) {
+                try await repository.saveSubscriber(Self.makeSubscriber(state: .rejected), lease: stale)
+            }
+            await #expect(throws: SubscriberLockError.self) {
+                try await repository.deleteSubscriber(domain: Self.domain, lease: stale)
+            }
+            let stored = try await repository.getSubscriber(domain: Self.domain)
+            #expect(stored?.state == .accepted)
+        }
+    }
+
+    @Test("A delete counts as a write that fences earlier holders")
+    func deleteFencesEarlierHolders() async throws {
+        try await Self.withRepository { repository, connection in
+            let stale = try await Self.lease(on: connection)
+            try await Self.expireLock(on: connection)
+            let later = try await Self.lease(on: connection)
+            try await repository.deleteSubscriber(domain: Self.domain, lease: later)
+
+            // The earlier holder cannot resurrect the record the later one removed.
+            await #expect(throws: SubscriberLockError.self) {
+                try await repository.saveSubscriber(Self.makeSubscriber(state: .accepted), lease: stale)
+            }
+            let stored = try await repository.getSubscriber(domain: Self.domain)
             #expect(stored == nil)
         }
     }
