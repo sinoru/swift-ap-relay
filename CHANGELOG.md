@@ -52,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Blocking an already-blocked domain now still removes a subscriber an interrupted earlier block left behind (still answering 409), so the domain stops receiving broadcasts
 - Blocked and restricted-mode domains are now rejected before an activity reserves a deduplication slot, so once such a domain is unblocked or allowlisted it can re-deliver the same activity id instead of having it silently absorbed as a duplicate until the TTL expires
 - Building from a checkout whose path contains spaces no longer fails in the version generator plugin
+- Booting with Docker Compose while Valkey is still loading its dataset no longer crashes the app: the compose file now waits for Valkey to answer PING and restarts the app if boot fails, and a boot failure is logged before the process exits ([#11](https://github.com/sinoru/swift-ap-relay/issues/11))
 
 ### Security
 

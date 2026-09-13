@@ -4,6 +4,13 @@ services:
     volumes:
       - valkey-data:/data
     command: ["valkey-server", "--appendonly", "yes"]
+    healthcheck:
+      # `-e` makes valkey-cli exit non-zero on an error reply, so the check
+      # stays unhealthy while Valkey answers PING with LOADING.
+      test: ["CMD", "valkey-cli", "-e", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   app:
     image: ghcr.io/sinoru/swift-ap-relay:latest
@@ -13,7 +20,9 @@ services:
     environment:
       REDIS_URL: redis://valkey:6379
     depends_on:
-      - valkey
+      valkey:
+        condition: service_healthy
+    restart: unless-stopped
     command: ["serve", "--hostname", "0.0.0.0", "--port", "8080"]
 
 volumes:
