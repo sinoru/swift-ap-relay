@@ -15,6 +15,7 @@ APRelay relays activities between federated instances, enabling cross-instance c
 - Domain blocking with optional reason
 - Restricted mode (allowlist)
 - Redis-backed activity deduplication
+- Redis-backed remote actor cache with negative caching and single-fetch coordination across replicas
 - Background job queue for reliable delivery
 - Prometheus metrics export on a dedicated port
 - WebFinger & NodeInfo 2.1 discovery
@@ -72,10 +73,10 @@ docker run --rm -v "$(pwd):/build" -w /build swift:6.3-noble swift test
 
 #### Redis Integration Tests
 
-The Redis repository tests are skipped unless `REDIS_TEST_URL` points at a live Redis or Valkey instance. They only touch keys for `*.redis-test.example` domains and one `redis-test.*` setting, but use a dedicated database index anyway:
+The Redis-backed test suites are skipped unless `REDIS_TEST_URL` points at a live Redis or Valkey instance. They only touch keys for `*.redis-test.example` domains and URLs and one `redis-test.*` setting, but use a dedicated database index anyway:
 
 ```bash
-REDIS_TEST_URL=redis://127.0.0.1:6379/15 swift test --filter RedisRelayRepositoryTests
+REDIS_TEST_URL=redis://127.0.0.1:6379/15 swift test --filter Redis
 ```
 
 #### HTML Snapshots

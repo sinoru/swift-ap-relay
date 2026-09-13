@@ -1045,7 +1045,10 @@ struct InboxTests {
             #expect(try await app.repository.getAllSubscribers(state: nil).isEmpty)
 
             // The real actor now signs a Follow reusing the same activity id.
+            // The spoof left the key id resolving to other-actor in the cache;
+            // start from an empty cache so the real document is fetched.
             app.actorFetcher = MockActorFetcher(id: TestSigning.testActorID)
+            app.actorCacheOverride = MockActorCache()
             let real = TestSigning.makeFollowActivity(id: activityID)
             let (realHeaders, realBody) = try TestSigning.signedRequest(activity: real)
             try await app.testing().test(.POST, "inbox", headers: realHeaders, body: realBody) {

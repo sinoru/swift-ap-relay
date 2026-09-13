@@ -159,8 +159,8 @@ struct ActorAuthorityTests {
         }
     }
 
-    @Test("Invalid signature does not trigger the authority re-fetch")
-    func invalidSignatureSkipsRefetch() async throws {
+    @Test("Invalid signatures resolve the claimed id once and never re-fetch it")
+    func invalidSignatureDoesNotRefetch() async throws {
         let fetcher = URLKeyedActorFetcher(documents: [
             Self.attackerActorURL: .actorDocument(
                 id: Self.victimActorID,
@@ -185,8 +185,15 @@ struct ActorAuthorityTests {
                 res async in
                 #expect(res.status == .unauthorized)
             }
+            #expect(await fetcher.log.urls == [Self.attackerActorURL, Self.victimActorID])
 
-            #expect(await fetcher.log.urls == [Self.attackerActorURL])
+            // The resolution is cached, so repeating the request costs the
+            // victim's origin nothing more.
+            try await app.testing().test(.POST, "inbox", headers: headers, body: body) {
+                res async in
+                #expect(res.status == .unauthorized)
+            }
+            #expect(await fetcher.log.urls == [Self.attackerActorURL, Self.victimActorID])
         }
     }
 
@@ -255,7 +262,7 @@ struct ActorAuthorityTests {
         }
     }
 
-    @Test("Host case and explicit default port differences do not require a re-fetch")
+    @Test("Host case and explicit default port differences are normalized away before the fetch")
     func equivalentURLNotRefetched() async throws {
         let keyIDBase = "https://Remote.Example:443/actor"
         let document = RemoteActor.actorDocument(
@@ -263,7 +270,7 @@ struct ActorAuthorityTests {
             inbox: TestSigning.testInboxURL,
             publicKeyPEM: TestSigning.publicKeyPEM
         )
-        let fetcher = URLKeyedActorFetcher(documents: [keyIDBase: document])
+        let fetcher = URLKeyedActorFetcher(documents: [TestSigning.testActorID: document])
 
         try await withApp(configure: configure(fetcher: fetcher)) { app in
             let activity = TestSigning.makeFollowActivity()
@@ -278,7 +285,7 @@ struct ActorAuthorityTests {
                 #expect(res.status == .accepted)
             }
 
-            #expect(await fetcher.log.urls == [keyIDBase])
+            #expect(await fetcher.log.urls == [TestSigning.testActorID])
         }
     }
 

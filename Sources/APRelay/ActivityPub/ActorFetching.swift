@@ -15,6 +15,12 @@ struct HTTPActorFetcher: ActorFetcher {
     private let userAgent: String
     private let httpSignature = HTTPSignature()
 
+    /// Deadline for the fetch. The client has no read timeout of its own, so
+    /// without this a server that accepts the connection and then stalls
+    /// would hold the inbox request, and the fetch claim on the URL,
+    /// until the claim expires.
+    static let requestTimeoutSeconds: Int64 = 30
+
     init(privateKey: _RSA.Signing.PrivateKey, keyID: String, userAgent: String) {
         self.privateKey = privateKey
         self.keyID = keyID
@@ -45,6 +51,7 @@ struct HTTPActorFetcher: ActorFetcher {
                 name: "Accept",
                 value: "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\", application/activity+json"
             )
+            req.timeout = .seconds(Self.requestTimeoutSeconds)
         }
         guard response.status == .ok else {
             throw Abort(.badGateway, reason: "Failed to fetch remote actor: \(url)")

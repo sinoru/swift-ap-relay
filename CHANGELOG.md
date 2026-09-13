@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `INSTANCE_INFO_CHECK_INTERVAL` environment variable to configure instance info check frequency (default: 60 seconds, minimum: 60)
 - `DEFAULT_QUEUE_WORKER_COUNT`, `DELIVERY_QUEUE_WORKER_COUNT`, and `INSTANCE_INFO_QUEUE_WORKER_COUNT` environment variables for configurable queue worker counts
 - `SOURCE_REPOSITORY_URL` and `SOURCE_REPOSITORY_COMMIT_PATH` environment variables for configurable source repository links
+- Redis-backed cache of verified remote actors for HTTP signature verification, shared across replicas: entries live 6 hours under the canonical actor id with key id URLs as aliases, concurrent requests for one key id share a single fetch, a URL that fails to yield a usable document is refused for 5 minutes without another fetch, a signature that does not verify against a cached key re-fetches the actor at most once per 5 minutes, and an actor's own Update or Delete evicts its entry
 
 ### Changed
 
@@ -27,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Delivery retries now back off exponentially (base 60s doubling per attempt, capped at 30 minutes) with equal jitter instead of retrying immediately
 - `DeliveryError.isRetryable` classification removed; retries are uniformly governed by `maxRetryCount` and the new backoff
 - Instance info cache TTL is now a fixed 1 hour, decoupled from the check interval
+- Remote actor fetches for signature verification now time out after 30 seconds
 - Japanese locale: use 登録 (registration) instead of 購読 (subscription) for more natural relay terminology
 
 ### Fixed

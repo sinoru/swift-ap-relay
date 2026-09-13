@@ -86,7 +86,12 @@ struct InboxController: RouteCollection {
                 try await handleAccept(activity: activity, verifiedActor: verifiedActor, req: req)
             case "Reject":
                 try await handleReject(activity: activity, verifiedActor: verifiedActor, req: req)
-            case "Create", "Announce", "Delete", "Update", "Move", "Add", "Remove", "Like", "EmojiReact":
+            case "Update", "Delete":
+                await evictSignerIfSelfReferenced(
+                    activity: activity, verifiedActor: verifiedActor, req: req
+                )
+                try await handleActivity(activity: activity, body: Data(buffer: body), req: req)
+            case "Create", "Announce", "Move", "Add", "Remove", "Like", "EmojiReact":
                 try await handleActivity(activity: activity, body: Data(buffer: body), req: req)
             default:
                 req.logger.info("Ignoring unsupported activity type: \(activity.type)")
@@ -343,6 +348,33 @@ struct InboxController: RouteCollection {
         try await subscriber.dispatchUndoFollowIfNeeded(on: req.queue)
         try await req.repository.deleteSubscriber(domain: actorDomain)
         req.logger.notice("Removed subscriber: \(actorDomain)")
+    }
+
+    // MARK: - Actor Cache
+
+    /// Drops the signer's cached actor when it announces a change to itself:
+    /// an Update whose object is the actor (new key, new inbox) or a Delete
+    /// of the actor. Only the verified signer can evict its own entry.
+    ///
+    /// Best-effort: a stale entry is also refreshed by the re-fetch on
+    /// signature failure and expires on its own, so a cache error is logged
+    /// rather than turning a relayed activity into a 5xx.
+    private func evictSignerIfSelfReferenced(
+        activity: APActivity,
+        verifiedActor: VerifiedActor,
+        req: Request
+    ) async {
+        guard let objectID = activity.object?.uriOrID,
+            ActorIdentity.matches(objectID, verifiedActor.id)
+        else {
+            return
+        }
+        do {
+            try await req.application.actorCache.evict(id: verifiedActor.id)
+            req.logger.info("Evicted cached actor \(verifiedActor.id) after \(activity.type)")
+        } catch {
+            req.logger.warning("Failed to evict cached actor \(verifiedActor.id): \(error)")
+        }
     }
 
     // MARK: - Activity (Broadcast)

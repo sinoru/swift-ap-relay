@@ -38,6 +38,39 @@ struct ActorIdentityTests {
         #expect(!ActorIdentity.matches(rhs, lhs))
     }
 
+    @Test(
+        "Normalization yields one spelling per resource",
+        arguments: [
+            ("https://example.org/actor", "https://example.org/actor"),
+            ("HTTPS://Example.ORG:443/actor", "https://example.org/actor"),
+            ("http://example.org:80/actor", "http://example.org/actor"),
+            ("https://example.org:8443/actor", "https://example.org:8443/actor"),
+            ("https://example.org/actor#main-key", "https://example.org/actor"),
+            ("https://example.org/actor?x=1#nonce", "https://example.org/actor?x=1"),
+            ("https://example.org/Actor/", "https://example.org/Actor/"),
+            ("https://example.org", "https://example.org"),
+        ]
+    )
+    func normalized(input: String, expected: String) {
+        #expect(ActorIdentity.normalized(input) == expected)
+    }
+
+    @Test(
+        "Identifiers that are not http(s) URLs with a host do not normalize",
+        arguments: [
+            "authority:https://example.org/actor",
+            "https://nonce@example.org/actor",
+            "https://user:secret@example.org/actor",
+            "ftp://example.org/actor",
+            "https:///actor",
+            "example.org/actor",
+            "",
+        ]
+    )
+    func notNormalizable(input: String) {
+        #expect(ActorIdentity.normalized(input) == nil)
+    }
+
     @Test("Non-URL identifiers fall back to string equality")
     func nonURLFallback() {
         #expect(ActorIdentity.matches("acct:alice@example.org", "acct:alice@example.org"))
