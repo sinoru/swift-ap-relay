@@ -113,6 +113,15 @@ struct ActorCachePolicy: Sendable {
 
     /// How often a waiting request re-checks the cache.
     var fetchPollInterval: Duration = .milliseconds(100)
+
+    /// How long this process answers an actor or alias lookup without asking
+    /// Redis again. Bounds how long a change made by another replica goes
+    /// unseen here; a signature failure drops the actor's local entries at
+    /// once, so a rotated key is never held back by it.
+    var localTTLSeconds = 60
+
+    /// How many actor and alias entries this process keeps at most.
+    var localCapacity = 10_000
 }
 
 // MARK: - App Storage
@@ -125,16 +134,32 @@ private struct ActorCachePolicyKey: StorageKey {
     typealias Value = ActorCachePolicy
 }
 
+private struct LocalActorCacheKey: StorageKey {
+    typealias Value = LocalActorCache
+}
+
 extension Application {
     /// The actor cache.
     ///
-    /// In production this returns a ``RedisActorCache`` backed by `app.redis`.
-    /// In tests, set `actorCacheOverride` to inject a mock.
+    /// In production this returns a ``RedisActorCache`` backed by `app.redis`,
+    /// fronted by the process's ``LocalActorCache`` once `configure` has set
+    /// one up. In tests, set `actorCacheOverride` to inject a mock.
     var actorCache: any ActorCaching {
         if let override = storage[ActorCacheOverrideKey.self] {
             return override
         }
-        return RedisActorCache(redis: self.redis)
+        let shared = RedisActorCache(redis: self.redis)
+        guard let local = storage[LocalActorCacheKey.self] else {
+            return shared
+        }
+        return LayeredActorCache(local: local, backing: shared)
+    }
+
+    /// The process-local actor cache in front of the shared one. Set once at
+    /// configuration, before requests are served.
+    var localActorCache: LocalActorCache? {
+        get { storage[LocalActorCacheKey.self] }
+        set { storage[LocalActorCacheKey.self] = newValue }
     }
 
     /// Override the actor cache (used by tests to inject a mock).

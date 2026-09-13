@@ -18,6 +18,7 @@ actor MockActorCache: ActorCaching {
     private var storedOnNextLockAcquire: VerifiedActor?
     private var negativeOnNextLockAcquire: (url: String, scope: NegativeScope)?
     private var negativeAtRelease: [String: Bool] = [:]
+    private var runOnNextRefetchState: (@Sendable () async -> Void)?
 
     func actor(id: String) async throws -> VerifiedActor? {
         guard let entry = actors[id], entry.expiresAt > Date() else { return nil }
@@ -100,6 +101,10 @@ actor MockActorCache: ActorCaching {
     }
 
     func refetchState(id: String) async throws -> RefetchState? {
+        if let body = runOnNextRefetchState {
+            runOnNextRefetchState = nil
+            await body()
+        }
         guard let held = refetchHolds[id], held.expiresAt > Date() else { return nil }
         return held.state
     }
@@ -116,6 +121,12 @@ actor MockActorCache: ActorCaching {
     /// as if another replica's failed fetch landed just before the claim.
     func markNegativeOnNextLockAcquire(url: String, scope: NegativeScope) {
         negativeOnNextLockAcquire = (url, scope)
+    }
+
+    /// Runs `body` while the next re-fetch state read is in flight, before
+    /// the state is read.
+    func runOnNextRefetchState(_ body: @escaping @Sendable () async -> Void) {
+        runOnNextRefetchState = body
     }
 
     /// Whether a negative entry for `url` existed when its claim was last

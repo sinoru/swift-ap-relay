@@ -28,6 +28,13 @@ func configure(_ app: Application) async throws {
     // Store config in app storage.
     app.relayConfig = config
 
+    // Keep recently used remote actors in memory in front of the Redis cache.
+    let actorCachePolicy = app.actorCachePolicy
+    app.localActorCache = LocalActorCache(
+        ttlSeconds: actorCachePolicy.localTTLSeconds,
+        capacity: actorCachePolicy.localCapacity
+    )
+
     // Set Server response header and User-Agent identity.
     app.http.server.configuration.serverName = AppInfo.userAgent(config: config)
 

@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `DEFAULT_QUEUE_WORKER_COUNT`, `DELIVERY_QUEUE_WORKER_COUNT`, and `INSTANCE_INFO_QUEUE_WORKER_COUNT` environment variables for configurable queue worker counts
 - `SOURCE_REPOSITORY_URL` and `SOURCE_REPOSITORY_COMMIT_PATH` environment variables for configurable source repository links
 - Redis-backed cache of verified remote actors for HTTP signature verification, shared across replicas: entries live 6 hours under the canonical actor id with key id URLs as aliases, concurrent requests for one key id share a single fetch, a URL that fails to yield a usable document is refused for 5 minutes without another fetch, a signature that does not verify against a cached key re-fetches the actor at most once per 5 minutes, and an actor's own Update or Delete evicts its entry
+- Each replica keeps recently used verified actors and key id aliases in memory for up to 60 seconds (at most 10,000 entries) in front of the Redis actor cache, so repeated deliveries skip the Redis round trip; a signature that fails against a cached key drops the actor's in-memory entries at once, so a key rotated and re-fetched by another replica is picked up immediately
 
 ### Changed
 

@@ -16,6 +16,11 @@ let package = Package(
         .package(url: "https://github.com/vapor/leaf.git", from: "4.4.0"),
         .package(url: "https://github.com/sinoru/swift-json.git", from: "0.2.0"),
         .package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.13.4"),
+        .package(
+            url: "https://github.com/sinoru/swift-synchronization-kit.git",
+            from: "1.0.1",
+            traits: ["RWLock"]
+        ),
     ],
     targets: [
         .plugin(
@@ -39,6 +44,7 @@ let package = Package(
                 .product(name: "Prometheus", package: "swift-prometheus"),
                 .product(name: "Leaf", package: "leaf"),
                 .product(name: "JSON", package: "swift-json"),
+                .product(name: "SynchronizationKit", package: "swift-synchronization-kit"),
             ],
             swiftSettings: [.strictMemorySafety()],
             plugins: [
