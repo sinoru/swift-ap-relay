@@ -39,37 +39,38 @@ struct AdminAPIController: RouteCollection {
 
             // LitePub: if following relay actor directly, prepare outbound follow before saving.
             if subscriber.followObjectURI == req.relayConfig.actorURL {
-                subscriber.outboundFollowActivityID = "\(req.relayConfig.baseURL)/activities/\(UUID().uuidString)"
+                subscriber.outboundFollowActivityID = req.relayConfig.makeActivityID()
             }
 
-            guard try await req.repository.saveSubscriber(subscriber, lease: lease) else {
-                throw Abort(.conflict, reason: "Domain is blocked")
-            }
-
-            try await req.queue.dispatch(
-                AcceptJob.self,
-                AcceptPayload(
-                    inboxURL: subscriber.inboxURL,
-                    followActivityID: subscriber.followActivityID,
-                    followerActorID: subscriber.actorID,
-                    followObjectURI: subscriber.followObjectURI
+            var notifications: [SubscriberNotification] = [
+                .accept(
+                    AcceptPayload(
+                        inboxURL: subscriber.inboxURL,
+                        followActivityID: subscriber.followActivityID,
+                        followerActorID: subscriber.actorID,
+                        followObjectURI: subscriber.followObjectURI,
+                        activityID: req.relayConfig.makeActivityID()
+                    )
                 ),
-                maxRetryCount: 5
-            )
+            ]
 
             // LitePub: if instance followed the relay actor directly, follow back.
             if subscriber.followObjectURI == req.relayConfig.actorURL,
                let outboundFollowID = subscriber.outboundFollowActivityID
             {
-                try await req.queue.dispatch(
-                    FollowJob.self,
-                    FollowPayload(
-                        inboxURL: subscriber.inboxURL,
-                        targetActorID: subscriber.actorID,
-                        followActivityID: outboundFollowID
-                    ),
-                    maxRetryCount: 5
+                notifications.append(
+                    .follow(
+                        FollowPayload(
+                            inboxURL: subscriber.inboxURL,
+                            targetActorID: subscriber.actorID,
+                            followActivityID: outboundFollowID
+                        )
+                    )
                 )
+            }
+
+            guard try await req.saveSubscriber(subscriber, lease: lease, notifying: notifications) else {
+                throw Abort(.conflict, reason: "Domain is blocked")
             }
 
             try await req.queues(.instanceInfo).dispatch(
@@ -97,27 +98,23 @@ struct AdminAPIController: RouteCollection {
 
             subscriber.state = .rejected
 
-            // Announce before storing: once the record says rejected, a retry
-            // returns early and would never resend a notification that failed
-            // to queue. The only write that can still be refused under the lock
-            // is one racing a block, and a Reject sent to a domain being blocked
-            // is harmless.
-            try await req.queue.dispatch(
-                RejectJob.self,
-                RejectPayload(
-                    inboxURL: subscriber.inboxURL,
-                    followActivityID: subscriber.followActivityID,
-                    followerActorID: subscriber.actorID,
-                    followObjectURI: subscriber.followObjectURI
+            // The Reject, and the Undo Follow for our outbound Follow (LitePub),
+            // are recorded with the write: sent only if it commits, and still
+            // sent if queuing them fails after it did.
+            let notifications: [SubscriberNotification] = [
+                .reject(
+                    RejectPayload(
+                        inboxURL: subscriber.inboxURL,
+                        followActivityID: subscriber.followActivityID,
+                        followerActorID: subscriber.actorID,
+                        followObjectURI: subscriber.followObjectURI,
+                        activityID: req.relayConfig.makeActivityID()
+                    )
                 ),
-                maxRetryCount: 5
-            )
-
-            // LitePub: if we had an outbound Follow, send Undo Follow.
-            try await subscriber.dispatchUndoFollowIfNeeded(on: req.queue)
+            ] + [subscriber.undoFollowNotification(config: req.relayConfig)].compactMap { $0 }
             subscriber.outboundFollowActivityID = nil
 
-            guard try await req.repository.saveSubscriber(subscriber, lease: lease) else {
+            guard try await req.saveSubscriber(subscriber, lease: lease, notifying: notifications) else {
                 throw Abort(.conflict, reason: "Domain is blocked")
             }
 
@@ -135,9 +132,11 @@ struct AdminAPIController: RouteCollection {
             }
 
             // LitePub: if we had an outbound Follow, send Undo Follow.
-            try await subscriber.dispatchUndoFollowIfNeeded(on: req.queue)
-
-            try await req.repository.deleteSubscriber(domain: domain, lease: lease)
+            try await req.deleteSubscriber(
+                domain: domain,
+                lease: lease,
+                notifying: [subscriber.undoFollowNotification(config: req.relayConfig)].compactMap { $0 }
+            )
             return AdminResponse(status: "removed", domain: domain)
         }
     }
@@ -148,8 +147,8 @@ struct AdminAPIController: RouteCollection {
     ///
     /// A lock held by another change for the whole wait, or a change
     /// superseded by a later lock holder's write, answers 409 so the operator
-    /// can retry. A failure
-    /// to take the lock at all surfaces as the underlying error.
+    /// can retry. A failure to take the lock at all surfaces as the underlying
+    /// error.
     private func withSubscriberLock<Result>(
         domain: String,
         req: Request,
@@ -186,8 +185,11 @@ struct AdminAPIController: RouteCollection {
             // broadcasts.
             if let subscriber = try await req.repository.getSubscriber(domain: body.domain) {
                 // LitePub: if we had an outbound Follow, send Undo Follow.
-                try await subscriber.dispatchUndoFollowIfNeeded(on: req.queue)
-                try await req.repository.deleteSubscriber(domain: body.domain, lease: lease)
+                try await req.deleteSubscriber(
+                    domain: body.domain,
+                    lease: lease,
+                    notifying: [subscriber.undoFollowNotification(config: req.relayConfig)].compactMap { $0 }
+                )
             }
 
             guard added else {

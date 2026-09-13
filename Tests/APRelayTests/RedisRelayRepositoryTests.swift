@@ -97,7 +97,7 @@ struct RedisRelayRepositoryTests {
             let lease = try await Self.lease(on: connection)
             let saved = try await repository.saveSubscriber(
                 Self.makeSubscriber(state: .pending, createdAt: created),
-                lease: lease
+                lease: lease, outbox: [], leaseSeconds: 0
             )
             #expect(saved)
 
@@ -112,7 +112,7 @@ struct RedisRelayRepositoryTests {
             // Re-saving with another state moves the index entry and keeps createdAt.
             let resaved = try await repository.saveSubscriber(
                 Self.makeSubscriber(state: .accepted, createdAt: Date()),
-                lease: lease
+                lease: lease, outbox: [], leaseSeconds: 0
             )
             #expect(resaved)
 
@@ -135,7 +135,7 @@ struct RedisRelayRepositoryTests {
             let lease = try await Self.lease(on: connection)
 
             let saved = try await repository.saveSubscriber(
-                Self.makeSubscriber(state: .accepted), lease: lease
+                Self.makeSubscriber(state: .accepted), lease: lease, outbox: [], leaseSeconds: 0
             )
             #expect(!saved)
 
@@ -153,13 +153,13 @@ struct RedisRelayRepositoryTests {
         try await Self.withRepository { repository, connection in
             let lease = try await Self.lease(on: connection)
             let saved = try await repository.saveSubscriber(
-                Self.makeSubscriber(state: .accepted), lease: lease
+                Self.makeSubscriber(state: .accepted), lease: lease, outbox: [], leaseSeconds: 0
             )
             #expect(saved)
             // A stale entry left by an interrupted write is cleaned up too.
             _ = try await connection.sadd(Self.domain, to: "subscribers:state:rejected").get()
 
-            try await repository.deleteSubscriber(domain: Self.domain, lease: lease)
+            try await repository.deleteSubscriber(domain: Self.domain, lease: lease, outbox: [], leaseSeconds: 0)
 
             let stored = try await repository.getSubscriber(domain: Self.domain)
             #expect(stored == nil)
@@ -178,7 +178,7 @@ struct RedisRelayRepositoryTests {
     func deleteUnknownDomain() async throws {
         try await Self.withRepository { repository, connection in
             let lease = try await Self.lease(Self.otherDomain, on: connection)
-            try await repository.deleteSubscriber(domain: Self.otherDomain, lease: lease)
+            try await repository.deleteSubscriber(domain: Self.otherDomain, lease: lease, outbox: [], leaseSeconds: 0)
             let stored = try await repository.getSubscriber(domain: Self.otherDomain)
             #expect(stored == nil)
         }
@@ -200,11 +200,11 @@ struct RedisRelayRepositoryTests {
             #expect(later.sequence > stale.sequence)
 
             let saved = try await repository.saveSubscriber(
-                Self.makeSubscriber(state: .pending), lease: stale
+                Self.makeSubscriber(state: .pending), lease: stale, outbox: [], leaseSeconds: 0
             )
             #expect(saved)
             let laterSaved = try await repository.saveSubscriber(
-                Self.makeSubscriber(state: .accepted), lease: later
+                Self.makeSubscriber(state: .accepted), lease: later, outbox: [], leaseSeconds: 0
             )
             #expect(laterSaved)
 
@@ -218,22 +218,22 @@ struct RedisRelayRepositoryTests {
         try await Self.withRepository { repository, connection in
             let stale = try await Self.lease(on: connection)
             let saved = try await repository.saveSubscriber(
-                Self.makeSubscriber(state: .pending), lease: stale
+                Self.makeSubscriber(state: .pending), lease: stale, outbox: [], leaseSeconds: 0
             )
             #expect(saved)
 
             try await Self.expireLock(on: connection)
             let later = try await Self.lease(on: connection)
             let written = try await repository.saveSubscriber(
-                Self.makeSubscriber(state: .accepted), lease: later
+                Self.makeSubscriber(state: .accepted), lease: later, outbox: [], leaseSeconds: 0
             )
             #expect(written)
 
             await #expect(throws: SubscriberLockError.self) {
-                try await repository.saveSubscriber(Self.makeSubscriber(state: .rejected), lease: stale)
+                try await repository.saveSubscriber(Self.makeSubscriber(state: .rejected), lease: stale, outbox: [], leaseSeconds: 0)
             }
             await #expect(throws: SubscriberLockError.self) {
-                try await repository.deleteSubscriber(domain: Self.domain, lease: stale)
+                try await repository.deleteSubscriber(domain: Self.domain, lease: stale, outbox: [], leaseSeconds: 0)
             }
             let stored = try await repository.getSubscriber(domain: Self.domain)
             #expect(stored?.state == .accepted)
@@ -246,11 +246,11 @@ struct RedisRelayRepositoryTests {
             let stale = try await Self.lease(on: connection)
             try await Self.expireLock(on: connection)
             let later = try await Self.lease(on: connection)
-            try await repository.deleteSubscriber(domain: Self.domain, lease: later)
+            try await repository.deleteSubscriber(domain: Self.domain, lease: later, outbox: [], leaseSeconds: 0)
 
             // The earlier holder cannot resurrect the record the later one removed.
             await #expect(throws: SubscriberLockError.self) {
-                try await repository.saveSubscriber(Self.makeSubscriber(state: .accepted), lease: stale)
+                try await repository.saveSubscriber(Self.makeSubscriber(state: .accepted), lease: stale, outbox: [], leaseSeconds: 0)
             }
             let stored = try await repository.getSubscriber(domain: Self.domain)
             #expect(stored == nil)

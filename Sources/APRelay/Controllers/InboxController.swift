@@ -169,18 +169,17 @@ struct InboxController: RouteCollection {
             ?? verifiedActor.inbox
             ?? guessInboxURL(from: activity.actor)
 
-        // Read, decide, write, and dispatch under the subscriber lock, so an
-        // admin accept/reject or another Follow for this domain cannot land
-        // between the read and the write and have its decision overwritten.
+        // Read, decide, and write under the subscriber lock, so an admin
+        // accept/reject or another Follow for this domain cannot land between
+        // the read and the write and have its decision overwritten.
         try await req.withSubscriberLock(domain: actorDomain) { lease in
-            let initialState: SubscriberState = config.manualAccept ? .pending : .accepted
-            var effectiveState = initialState
-            var currentSubscriber: Subscriber?
+            let subscriber: Subscriber
+            var notifications: [SubscriberNotification] = []
 
             if var existing = try await repository.getSubscriber(domain: actorDomain) {
                 // If switching from LitePub (relay actor) to Mastodon (public), clean up outbound follow.
                 if existing.followObjectURI == config.actorURL && objectURI != config.actorURL {
-                    try await existing.dispatchUndoFollowIfNeeded(on: req.queue)
+                    notifications += [existing.undoFollowNotification(config: config)].compactMap { $0 }
                     existing.outboundFollowActivityID = nil
                 }
 
@@ -195,19 +194,17 @@ struct InboxController: RouteCollection {
                 existing.inboxURL = inboxURL
                 existing.followActivityID = activity.id
                 existing.followObjectURI = objectURI
-                effectiveState = existing.state
 
                 // LitePub: if following relay actor directly and accepted, prepare outbound follow.
-                if objectURI == config.actorURL && effectiveState == .accepted
+                if objectURI == config.actorURL && existing.state == .accepted
                     && existing.outboundFollowActivityID == nil
                 {
-                    existing.outboundFollowActivityID = "\(config.baseURL)/activities/\(UUID().uuidString)"
+                    existing.outboundFollowActivityID = config.makeActivityID()
                 }
-
-                try await save(existing, activityID: activity.id, lease: lease, req: req)
-                currentSubscriber = existing
+                subscriber = existing
             } else {
-                var subscriber = Subscriber(
+                let initialState: SubscriberState = config.manualAccept ? .pending : .accepted
+                var created = Subscriber(
                     domain: actorDomain,
                     inboxURL: inboxURL,
                     actorID: activity.actor,
@@ -220,42 +217,45 @@ struct InboxController: RouteCollection {
 
                 // LitePub: if following relay actor directly and accepted, prepare outbound follow.
                 if objectURI == config.actorURL && initialState == .accepted {
-                    subscriber.outboundFollowActivityID = "\(config.baseURL)/activities/\(UUID().uuidString)"
+                    created.outboundFollowActivityID = config.makeActivityID()
                 }
-
-                try await save(subscriber, activityID: activity.id, lease: lease, req: req)
-                currentSubscriber = subscriber
+                subscriber = created
             }
 
-            req.logger.notice("Follow from \(actorDomain), state: \(effectiveState.rawValue)")
-
-            if effectiveState == .accepted {
-                try await req.queue.dispatch(
-                    AcceptJob.self,
-                    AcceptPayload(
-                        inboxURL: inboxURL,
-                        followActivityID: activity.id,
-                        followerActorID: activity.actor,
-                        followObjectURI: objectURI
-                    ),
-                    maxRetryCount: 5
+            let isAccepted = subscriber.state == .accepted
+            if isAccepted {
+                notifications.append(
+                    .accept(
+                        AcceptPayload(
+                            inboxURL: inboxURL,
+                            followActivityID: activity.id,
+                            followerActorID: activity.actor,
+                            followObjectURI: objectURI,
+                            activityID: config.makeActivityID()
+                        )
+                    )
                 )
 
                 // LitePub: if instance followed the relay actor directly, follow back.
                 if objectURI == config.actorURL,
-                   let outboundFollowID = currentSubscriber?.outboundFollowActivityID
+                   let outboundFollowID = subscriber.outboundFollowActivityID
                 {
-                    try await req.queue.dispatch(
-                        FollowJob.self,
-                        FollowPayload(
-                            inboxURL: inboxURL,
-                            targetActorID: activity.actor,
-                            followActivityID: outboundFollowID
-                        ),
-                        maxRetryCount: 5
+                    notifications.append(
+                        .follow(
+                            FollowPayload(
+                                inboxURL: inboxURL,
+                                targetActorID: activity.actor,
+                                followActivityID: outboundFollowID
+                            )
+                        )
                     )
                 }
+            }
 
+            try await save(subscriber, activityID: activity.id, lease: lease, notifying: notifications, req: req)
+            req.logger.notice("Follow from \(actorDomain), state: \(subscriber.state.rawValue)")
+
+            if isAccepted {
                 try await req.queues(.instanceInfo).dispatch(
                     InstanceInfoFetchJob.self,
                     InstanceInfoFetchPayload(domain: actorDomain),
@@ -265,8 +265,8 @@ struct InboxController: RouteCollection {
         }
     }
 
-    /// Persists a Follow's subscriber record, refusing it if the domain was
-    /// blocked after the inbox check.
+    /// Persists a Follow's subscriber record with the notifications it
+    /// entails, refusing it if the domain was blocked after the inbox check.
     ///
     /// The repository refuses the write atomically for a blocked domain. Like
     /// the inbox's own blocked-domain rejection, release the dedup slot so an
@@ -275,9 +275,10 @@ struct InboxController: RouteCollection {
         _ subscriber: Subscriber,
         activityID: String,
         lease: SubscriberLease,
+        notifying notifications: [SubscriberNotification],
         req: Request
     ) async throws {
-        guard try await req.repository.saveSubscriber(subscriber, lease: lease) else {
+        guard try await req.saveSubscriber(subscriber, lease: lease, notifying: notifications) else {
             await req.releaseDeduplicationSlot(activityID)
             throw Abort(.forbidden, reason: "Domain is blocked")
         }
@@ -420,8 +421,11 @@ struct InboxController: RouteCollection {
         // abusers belong on the block list.
         //
         // LitePub: if we had an outbound Follow, send Undo Follow back.
-        try await subscriber.dispatchUndoFollowIfNeeded(on: req.queue)
-        try await req.repository.deleteSubscriber(domain: actorDomain, lease: lease)
+        try await req.deleteSubscriber(
+            domain: actorDomain,
+            lease: lease,
+            notifying: [subscriber.undoFollowNotification(config: req.relayConfig)].compactMap { $0 }
+        )
         req.logger.notice("Removed subscriber: \(actorDomain)")
         return .handled
     }
@@ -499,7 +503,7 @@ struct InboxController: RouteCollection {
 
             let announce = APActivity(
                 context: .default,
-                id: "\(config.baseURL)/activities/\(UUID().uuidString)",
+                id: config.makeActivityID(),
                 type: "Announce",
                 actor: config.actorURL,
                 object: .uri(objectURI),
@@ -569,7 +573,7 @@ struct InboxController: RouteCollection {
             else { return }
 
             // Remote already rejected our Follow, so no need to send Undo back.
-            try await req.repository.deleteSubscriber(domain: actorDomain, lease: lease)
+            try await req.deleteSubscriber(domain: actorDomain, lease: lease, notifying: [])
 
             req.logger.notice(
                 "Instance \(actorDomain) rejected our Follow; removed subscriber"

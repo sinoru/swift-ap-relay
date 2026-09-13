@@ -10,7 +10,9 @@ extension RelayRepository {
     func seedSubscriber(_ subscriber: Subscriber) async throws -> Bool {
         try await saveSubscriber(
             subscriber,
-            lease: SubscriberLease(domain: subscriber.domain, token: "test-seed", sequence: 0)
+            lease: SubscriberLease(domain: subscriber.domain, token: "test-seed", sequence: 0),
+            outbox: [],
+            leaseSeconds: 0
         )
     }
 }

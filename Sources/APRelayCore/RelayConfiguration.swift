@@ -27,6 +27,11 @@ package struct RelayConfiguration: Sendable {
         "\(baseURL)/inbox"
     }
 
+    /// A new id for an activity the relay sends.
+    package func makeActivityID() -> String {
+        "\(baseURL)/activities/\(UUID().uuidString)"
+    }
+
     package init(
         baseURL: String,
         redisURL: String = "redis://localhost:6379",

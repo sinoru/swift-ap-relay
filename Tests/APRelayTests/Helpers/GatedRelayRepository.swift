@@ -47,14 +47,34 @@ actor GatedRelayRepository: RelayRepository {
         try await base.getAcceptedInboxURLs()
     }
 
-    func saveSubscriber(_ subscriber: Subscriber, lease: SubscriberLease) async throws -> Bool {
+    func saveSubscriber(
+        _ subscriber: Subscriber,
+        lease: SubscriberLease,
+        outbox: [SubscriberOutboxEntry],
+        leaseSeconds: Int
+    ) async throws -> Bool {
         await pass(.saveSubscriber)
-        return try await base.saveSubscriber(subscriber, lease: lease)
+        return try await base.saveSubscriber(subscriber, lease: lease, outbox: outbox, leaseSeconds: leaseSeconds)
     }
 
-    func deleteSubscriber(domain: String, lease: SubscriberLease) async throws {
+    func deleteSubscriber(
+        domain: String,
+        lease: SubscriberLease,
+        outbox: [SubscriberOutboxEntry],
+        leaseSeconds: Int
+    ) async throws {
         await pass(.deleteSubscriber)
-        try await base.deleteSubscriber(domain: domain, lease: lease)
+        try await base.deleteSubscriber(domain: domain, lease: lease, outbox: outbox, leaseSeconds: leaseSeconds)
+    }
+
+    // MARK: - Subscriber Outbox
+
+    func claimOutboxEntries(limit: Int, leaseSeconds: Int) async throws -> [SubscriberOutboxEntry] {
+        try await base.claimOutboxEntries(limit: limit, leaseSeconds: leaseSeconds)
+    }
+
+    func completeOutboxEntry(id: String) async throws {
+        try await base.completeOutboxEntry(id: id)
     }
 
     // MARK: - Blocked Domains

@@ -16,6 +16,10 @@ struct FollowJob: AsyncJob {
 
     func dequeue(_ context: QueueContext, _ payload: FollowPayload) async throws {
         let app = context.application
+        guard try await payload.isCurrent(in: app.repository) else {
+            context.logger.info("Skipping Follow to \(payload.inboxURL): the subscriber has changed since it was recorded")
+            return
+        }
         let config = app.relayConfig
         let privateKey = app.signingKey
 

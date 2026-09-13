@@ -48,6 +48,10 @@ func configure(_ app: Application) async throws {
         // Schedule periodic instance info check.
         app.queues.schedule(InstanceInfoCheckJob())
             .every(seconds: config.instanceInfoCheckInterval)
+
+        // Deliver subscriber notifications a request recorded but did not queue.
+        app.queues.schedule(SubscriberOutboxJob())
+            .every(minutes: 1)
     }
 
     // Server-only setup: signing key, metrics server, and subscriber info

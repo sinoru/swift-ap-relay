@@ -8,6 +8,12 @@ struct UndoFollowPayload: Codable, Sendable {
     let inboxURL: String
     let targetActorID: String
     let followActivityID: String
+    /// Id of the activity to send, chosen when the notification was recorded
+    /// so that every retry and redelivery sends the same activity.
+    ///
+    /// `nil` only for jobs queued before ids were stored with them.
+    /// TODO: Remove the optionality once those jobs have drained.
+    let activityID: String?
 }
 
 /// Sends a signed Undo Follow activity to a remote inbox.
@@ -16,12 +22,16 @@ struct UndoFollowJob: AsyncJob {
 
     func dequeue(_ context: QueueContext, _ payload: UndoFollowPayload) async throws {
         let app = context.application
+        guard try await payload.isCurrent(in: app.repository) else {
+            context.logger.info("Skipping Undo Follow to \(payload.inboxURL): the subscriber has changed since it was recorded")
+            return
+        }
         let config = app.relayConfig
         let privateKey = app.signingKey
 
         let undo = APActivity(
             context: .default,
-            id: "\(config.baseURL)/activities/\(UUID().uuidString)",
+            id: payload.activityID ?? config.makeActivityID(),
             type: "Undo",
             actor: config.actorURL,
             object: .activity(APActivity(

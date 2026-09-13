@@ -27,6 +27,8 @@ actor MockRelayRepository: RelayRepository {
     }
 
     private var subscribers: [String: Subscriber] = [:]
+    private var outbox: [String: (notification: SubscriberNotification, availableAt: Date, order: Int)] = [:]
+    private var outboxOrder = 0
     private var blockedDomains: Set<String> = []
     private var blockedDomainMeta: [String: (reason: String?, createdAt: Date?)] = [:]
     private var allowedDomains: Set<String> = []
@@ -51,18 +53,62 @@ actor MockRelayRepository: RelayRepository {
             .map(\.inboxURL)
     }
 
-    func saveSubscriber(_ subscriber: Subscriber, lease: SubscriberLease) async throws -> Bool {
+    func saveSubscriber(
+        _ subscriber: Subscriber,
+        lease: SubscriberLease,
+        outbox entries: [SubscriberOutboxEntry],
+        leaseSeconds: Int
+    ) async throws -> Bool {
         try checkFence(domain: subscriber.domain, lease: lease)
         guard !blockedDomains.contains(subscriber.domain) else { return false }
         recordWrite(domain: subscriber.domain, lease: lease)
         subscribers[subscriber.domain] = subscriber
+        record(entries, leaseSeconds: leaseSeconds)
         return true
     }
 
-    func deleteSubscriber(domain: String, lease: SubscriberLease) async throws {
+    func deleteSubscriber(
+        domain: String,
+        lease: SubscriberLease,
+        outbox entries: [SubscriberOutboxEntry],
+        leaseSeconds: Int
+    ) async throws {
         try checkFence(domain: domain, lease: lease)
         recordWrite(domain: domain, lease: lease)
         subscribers.removeValue(forKey: domain)
+        record(entries, leaseSeconds: leaseSeconds)
+    }
+
+    // MARK: - Subscriber Outbox
+
+    private func record(_ entries: [SubscriberOutboxEntry], leaseSeconds: Int) {
+        let availableAt = Date().addingTimeInterval(TimeInterval(leaseSeconds))
+        for entry in entries {
+            outboxOrder += 1
+            outbox[entry.id] = (entry.notification, availableAt, outboxOrder)
+        }
+    }
+
+    func claimOutboxEntries(limit: Int, leaseSeconds: Int) async throws -> [SubscriberOutboxEntry] {
+        let now = Date()
+        let due = outbox
+            .filter { $0.value.availableAt <= now }
+            .sorted { ($0.value.availableAt, $0.value.order) < ($1.value.availableAt, $1.value.order) }
+            .prefix(limit)
+        let leasedUntil = now.addingTimeInterval(TimeInterval(leaseSeconds))
+        return due.map { id, value in
+            outbox[id] = (value.notification, leasedUntil, value.order)
+            return SubscriberOutboxEntry(id: id, notification: value.notification)
+        }
+    }
+
+    func completeOutboxEntry(id: String) async throws {
+        outbox[id] = nil
+    }
+
+    /// How many notifications are still waiting in the outbox.
+    func pendingOutboxCount() -> Int {
+        outbox.count
     }
 
     // MARK: - Blocked Domains

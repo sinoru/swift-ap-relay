@@ -321,7 +321,7 @@ struct SubscriberLockTests {
         }
     }
 
-    @Test("An admin reject whose lock expires after dispatching, with no later write, still commits")
+    @Test("An admin reject whose lock expires before its write, with no later write, still commits and notifies")
     func rejectOutlivingItsLockCommits() async throws {
         let base = MockRelayRepository(fenced: true)
         var pending = Self.subscriber(state: .pending)
@@ -332,8 +332,8 @@ struct SubscriberLockTests {
         try await withApp(configure: configure(repository: repository)) { app in
             let lock = try mockLock(app)
 
-            // Reject and Undo Follow are dispatched before the write, which
-            // stalls past the lock's lifetime while nobody else takes it.
+            // The write stalls past the lock's lifetime while nobody else
+            // takes it.
             async let rejectStatus = adminStatus(app, "reject")
             try await waitUntil("the reject is between its dispatch and write") {
                 await repository.isHeldAtGate
@@ -347,6 +347,37 @@ struct SubscriberLockTests {
             #expect(stored?.outboundFollowActivityID == nil)
             #expect(app.queues.asyncTest.all(RejectJob.self).count == 1)
             #expect(app.queues.asyncTest.all(UndoFollowJob.self).count == 1)
+        }
+    }
+
+    @Test("An admin reject overtaken by a later admin accept sends no Reject or Undo Follow")
+    func supersededRejectSendsNothing() async throws {
+        let base = MockRelayRepository(fenced: true)
+        var pending = Self.subscriber(state: .pending)
+        pending.outboundFollowActivityID = "http://localhost/activities/outbound-1"
+        _ = try await base.seedSubscriber(pending)
+        let repository = GatedRelayRepository(base: base, gating: .saveSubscriber)
+
+        try await withApp(configure: configure(repository: repository)) { app in
+            let lock = try mockLock(app)
+
+            // The reject stalls past its lock's lifetime; an accept takes the
+            // lock and commits first.
+            async let rejectStatus = adminStatus(app, "reject")
+            try await waitUntil("the reject is about to write") {
+                await repository.isHeldAtGate
+            }
+            await lock.expire(domain: Self.domain)
+            #expect(try await adminStatus(app, "accept") == .ok)
+            await repository.gate.open()
+
+            #expect(try await rejectStatus == .conflict)
+            let stored = try await base.getSubscriber(domain: Self.domain)
+            #expect(stored?.state == .accepted)
+            #expect(app.queues.asyncTest.all(AcceptJob.self).count == 1)
+            #expect(app.queues.asyncTest.all(RejectJob.self).isEmpty)
+            #expect(app.queues.asyncTest.all(UndoFollowJob.self).isEmpty)
+            #expect(await base.pendingOutboxCount() == 0)
         }
     }
 
